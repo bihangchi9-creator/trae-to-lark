@@ -3,6 +3,7 @@ import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../../../src/agent/types.js';
+import type { FakeAgentEvents } from '../../helpers/fake-agent.js';
 import { createDefaultProfileConfig } from '../../../src/config/profile-schema.js';
 import { log } from '../../../src/core/logger.js';
 import { SessionStore } from '../../../src/session/store.js';
@@ -123,6 +124,19 @@ describe('markdown stream startup failures', () => {
     const streamFailure = deferred<void>();
     let streamProducerStarted = false;
     const h = await createHarness({
+      // The first run has to stream something, or no progress stream is opened
+      // at all and there is no late failure to log.
+      events: [
+        [
+          { type: 'text', delta: 'progress update' },
+          {
+            type: 'error',
+            message: 'codex exited with code 1: Error loading config.toml',
+            terminationReason: 'failed',
+          },
+        ],
+        [{ type: 'done', terminationReason: 'normal' }],
+      ],
       stream: async (_chatId, input) => {
         const producer = (input as {
           markdown?: (ctrl: { setContent(markdown: string): Promise<void> }) => Promise<void>;
@@ -187,6 +201,33 @@ describe('markdown stream startup failures', () => {
     expect(h.channel.sent).toHaveLength(1);
     expect(lastMarkdown(h.channel)).toContain('FINAL_SENTINEL');
     expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_final' });
+  });
+
+  it('opens no progress stream for a final-only round', async () => {
+    // The regression this guards: Codex answering without any commentary. The
+    // SDK sends its streaming card as soon as `stream()` is called and finishes
+    // an empty one with "(no content)", so the user saw that placeholder for a
+    // few seconds, watched it get recalled, and only then got the answer.
+    const streamCalls: unknown[] = [];
+    const h = await createHarness({
+      events: [
+        { type: 'final_text', content: 'FINAL_ONLY_SENTINEL' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        streamCalls.push(input);
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_final_only', 'run'));
+    await waitFor(() => h.channel.sent.length === 1);
+    // give a stray stream / recall a chance to fire before asserting
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(streamCalls).toHaveLength(0);
+    expect(h.channel.sent).toHaveLength(1);
+    expect(lastMarkdown(h.channel)).toContain('FINAL_ONLY_SENTINEL');
   });
 
   it('still sends the final reply when the progress stream fails at completion', async () => {
@@ -296,7 +337,8 @@ async function createHarness(options: {
   reactionCreate?: () => Promise<{ data: { reaction_id: string } }>;
   stream?: StreamFn;
   send?: SendFn;
-  events?: readonly AgentEvent[];
+  /** One run's events, or one array per run. */
+  events?: FakeAgentEvents;
   messageReply?: 'card' | 'markdown' | 'text';
 } = {}): Promise<{
   tmp: TmpProfile;
@@ -338,18 +380,16 @@ async function createHarness(options: {
   const agent = new FakeAgentAdapter({
     id: 'codex',
     displayName: 'Codex',
-    events: options.events
-      ? [options.events]
-      : [
-          [
-            {
-              type: 'error',
-              message: 'codex exited with code 1: Error loading config.toml',
-              terminationReason: 'failed',
-            },
-          ],
-          [{ type: 'done', terminationReason: 'normal' }],
-        ],
+    events: options.events ?? [
+      [
+        {
+          type: 'error',
+          message: 'codex exited with code 1: Error loading config.toml',
+          terminationReason: 'failed',
+        },
+      ],
+      [{ type: 'done', terminationReason: 'normal' }],
+    ],
   });
   const channel = createFakeLarkChannel(options);
   sdkMock.channel = channel;

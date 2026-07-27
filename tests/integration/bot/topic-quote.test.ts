@@ -97,7 +97,15 @@ describe('topic message quote handling', () => {
   });
 
   it('treats messages with threadId as topic messages even when chat mode cache says group', async () => {
-    const h = await createHarness({ chatMode: 'group' });
+    // The agent has to say something for a progress stream to exist at all —
+    // see "does not open a progress stream when the agent produces no content".
+    const h = await createHarness({
+      chatMode: 'group',
+      agentEvents: [
+        { type: 'text', delta: '好的' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+    });
 
     await startTestBridge(h);
 
@@ -131,6 +139,10 @@ describe('topic message quote handling', () => {
     const h = await createHarness({
       chatMode: 'topic',
       rawThreadIds: { om_topic_start: 'omt_backfilled' },
+      agentEvents: [
+        { type: 'text', delta: '好的' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
     });
 
     await startTestBridge(h);
@@ -160,7 +172,13 @@ describe('topic message quote handling', () => {
   it('does not thread the reply when a topic-group event has no recoverable threadId', async () => {
     // Backfill lookup returns nothing → degrade gracefully to chat-level
     // routing rather than crashing or blocking the run.
-    const h = await createHarness({ chatMode: 'topic' });
+    const h = await createHarness({
+      chatMode: 'topic',
+      agentEvents: [
+        { type: 'text', delta: '好的' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+    });
 
     await startTestBridge(h);
 
@@ -273,9 +291,10 @@ describe('topic message quote handling', () => {
     expect(prompt).not.toContain('<topic_context>');
   });
 
-  it('recalls the streamed message when the agent produces no content', async () => {
-    // Empty agent output must not leave an "(no content)" card behind — the SDK
-    // creates the streaming card eagerly, so we recall it when nothing renders.
+  it('does not open a progress stream when the agent produces no content', async () => {
+    // The SDK starts a stream eagerly and finishes an empty one with its
+    // "(no content)" placeholder, so a content-less run used to post a card and
+    // recall it seconds later. Nothing durable to show → no message at all.
     const h = await createHarness({
       chatMode: 'group',
       agentEvents: [{ type: 'done', terminationReason: 'normal' }],
@@ -286,10 +305,13 @@ describe('topic message quote handling', () => {
     await h.channel.handlers.message?.(
       message({ messageId: 'om_empty', rootId: 'om_empty', parentId: 'om_empty', content: '@Bridge ping' }),
     );
-    await waitFor(() => h.channel.streams.length === 1);
-    await waitFor(() => h.channel.recallMessage.mock.calls.length === 1);
+    await waitFor(() => h.agent.runOptions.length === 1);
+    // give the (absent) stream and its recall a chance to fire before asserting
+    await new Promise((resolve) => setTimeout(resolve, 80));
 
-    expect(h.channel.recallMessage).toHaveBeenCalledWith('om_stream_1');
+    expect(h.channel.streams).toHaveLength(0);
+    expect(h.channel.sent).toHaveLength(0);
+    expect(h.channel.recallMessage).not.toHaveBeenCalled();
   });
 
   it('does not recall when the agent produced real content', async () => {

@@ -1082,6 +1082,23 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       let cardCtrl:
         | { update(next: object | ((current: object) => object)): Promise<void> }
         | undefined;
+      const progress = createLazyProgressStream(scope, replyMode, () =>
+        channel.stream(
+          chatId,
+          {
+            card: {
+              initial: renderCard(initialState, cardRenderOptions),
+              producer: async (ctrl) => {
+                producerStarted = true;
+                cardCtrl = ctrl;
+                await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
+                await renderDone;
+              },
+            },
+          },
+          sendOpts,
+        ),
+      );
       const renderDone = processAgentStream(
         handle,
         eventStream,
@@ -1090,30 +1107,16 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async (state) => {
           latestState = state;
+          if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
           if (cardCtrl) {
             await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
           }
         },
       );
-      const streamDone = channel.stream(
-        chatId,
-        {
-          card: {
-            initial: renderCard(initialState, cardRenderOptions),
-            producer: async (ctrl) => {
-              producerStarted = true;
-              cardCtrl = ctrl;
-              await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
-              await renderDone;
-            },
-          },
-        },
-        sendOpts,
-      );
       try {
         await awaitRenderAwareStream({
           mode: replyMode,
-          streamDone,
+          progress,
           renderDone,
           producerStarted: () => producerStarted,
           fallback: async (state) => {
@@ -1130,7 +1133,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         if (controls.profileConfig.agentKind !== 'codex') throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
-      await recallIfEmptyStreamedReply(channel, streamDone, filterForPrefs(latestState), scope);
+      await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
       if (controls.profileConfig.agentKind === 'codex') {
         await sendFinalReply({
           channel,
@@ -1146,6 +1149,20 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       let latestState: RunState = initialState;
       let producerStarted = false;
       let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
+      const progress = createLazyProgressStream(scope, replyMode, () =>
+        channel.stream(
+          chatId,
+          {
+            markdown: async (ctrl) => {
+              producerStarted = true;
+              markdownCtrl = ctrl;
+              await ctrl.setContent(renderText(filterForPrefs(latestState)));
+              await renderDone;
+            },
+          },
+          sendOpts,
+        ),
+      );
       const renderDone = processAgentStream(
         handle,
         eventStream,
@@ -1154,27 +1171,16 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async (state) => {
           latestState = state;
+          if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
           if (markdownCtrl) {
             await markdownCtrl.setContent(renderText(filterForPrefs(state)));
           }
         },
       );
-      const streamDone = channel.stream(
-        chatId,
-        {
-          markdown: async (ctrl) => {
-            producerStarted = true;
-            markdownCtrl = ctrl;
-            await ctrl.setContent(renderText(filterForPrefs(latestState)));
-            await renderDone;
-          },
-        },
-        sendOpts,
-      );
       try {
         await awaitRenderAwareStream({
           mode: replyMode,
-          streamDone,
+          progress,
           renderDone,
           producerStarted: () => producerStarted,
           fallback: async (state) => {
@@ -1189,7 +1195,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         if (controls.profileConfig.agentKind !== 'codex') throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
-      await recallIfEmptyStreamedReply(channel, streamDone, filterForPrefs(latestState), scope);
+      await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
       if (controls.profileConfig.agentKind === 'codex') {
         await sendFinalReply({
           channel,
@@ -1234,23 +1240,90 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   }
 }
 
+interface LazyProgressStream {
+  /**
+   * Mirrors the underlying `channel.stream(...)` promise, and stays pending
+   * forever while no stream has been opened — so callers can race it against
+   * the render loop exactly as if the stream had been created up front.
+   */
+  readonly settled: Promise<unknown>;
+  opened(): boolean;
+  ensureOpen(): void;
+}
+
 /**
- * The SDK creates the streaming card eagerly (before any content arrives), so a
- * run that produces no text leaves a card the SDK fills with its "(no content)"
- * placeholder. When the final render has nothing to show — a clean `done` with
- * no text; error/interrupt/timeout keep it non-empty via their notices — recall
- * that empty message instead of leaving noise in the chat.
+ * Wrap a progress stream so the user-visible message is only created once the
+ * run has something worth showing (see `shouldOpenProgressStream`).
+ *
+ * The SDK starts a stream eagerly: `channel.stream(...)` sends a card before
+ * the producer runs, and finishes it with a "(no content)" placeholder when the
+ * producer never supplied any text. A Codex round that only produces a final
+ * answer (delivered separately by `sendFinalReply`) used to hit exactly that:
+ * an empty card sat in the chat for seconds until `recall-empty` cleaned it up.
+ */
+function createLazyProgressStream(
+  scope: string,
+  mode: 'card' | 'markdown',
+  open: () => Promise<unknown>,
+): LazyProgressStream {
+  let stream: Promise<unknown> | undefined;
+  let settle!: (result: Promise<unknown>) => void;
+  const settled = new Promise<unknown>((resolve, reject) => {
+    settle = (result) => {
+      result.then(resolve, reject);
+    };
+  });
+  return {
+    settled,
+    opened: () => stream !== undefined,
+    ensureOpen: () => {
+      if (stream) return;
+      log.info('outbound', 'progress-stream-open', { scope, mode });
+      stream = open();
+      settle(stream);
+    },
+  };
+}
+
+/**
+ * Is there anything in this state that will still be on screen when the run
+ * ends? Footer status lines ("正在思考…") don't count: the terminal event drops
+ * them, so a stream opened for a footer alone can still finish empty — which is
+ * the placeholder-then-recall churn we're avoiding.
+ *
+ * Terminal states don't count either. By then the stream has nothing left to
+ * stream, and whatever the run produced goes out as a normal reply
+ * (`sendFinalReply`, or the stream fallback) instead of a card that would be
+ * created only to be finished a moment later.
+ *
+ * `state` must already be `filterForPrefs`-projected, and emptiness is measured
+ * with `renderText` in both reply modes so it matches the rule
+ * `recallIfEmptyStreamedReply` applies: a stream we open is one that survives.
+ */
+function shouldOpenProgressStream(state: RunState): boolean {
+  if (state.terminal !== 'running') return false;
+  return renderText({ ...state, footer: null }).trim() !== '';
+}
+
+/**
+ * Backstop for a progress stream that was opened on real content and still
+ * ended up empty — e.g. `/config` hiding tool calls mid-run, which retroactively
+ * empties a tool-only render. The SDK fills such a card with its "(no content)"
+ * placeholder, so recall it instead of leaving noise in the chat.
  *
  * `finalState` must already be `filterForPrefs`-projected (what the user sees).
  */
 async function recallIfEmptyStreamedReply(
   channel: LarkChannel,
-  streamDone: Promise<unknown>,
+  progress: LazyProgressStream,
   finalState: RunState,
   scope: string,
 ): Promise<void> {
+  if (!progress.opened()) return;
   if (renderText(finalState).trim() !== '') return;
-  const result = (await streamDone.catch(() => undefined)) as { messageId?: string } | undefined;
+  const result = (await progress.settled.catch(() => undefined)) as
+    | { messageId?: string }
+    | undefined;
   const messageId = result?.messageId;
   if (!messageId) return;
   try {
@@ -1493,12 +1566,12 @@ async function processAgentStream(
 
 async function awaitRenderAwareStream(input: {
   mode: 'card' | 'markdown';
-  streamDone: Promise<unknown>;
+  progress: LazyProgressStream;
   renderDone: Promise<RunState>;
   producerStarted: () => boolean;
   fallback: (state: RunState) => Promise<void>;
 }): Promise<void> {
-  const streamResult = input.streamDone.then(
+  const streamResult = input.progress.settled.then(
     () => ({ kind: 'stream' as const, ok: true as const }),
     (err) => ({ kind: 'stream' as const, ok: false as const, err }),
   );
@@ -1521,6 +1594,15 @@ async function awaitRenderAwareStream(input: {
   if (first.kind === 'stream') {
     const rendered = await renderResult;
     if (!rendered.ok) throw rendered.err;
+    return;
+  }
+
+  // Nothing durable ever showed up, so no progress message was opened at all
+  // (the common Codex final-only round). Whatever the run ended with still has
+  // to reach the user as a standalone reply.
+  if (!input.progress.opened()) {
+    log.info('outbound', 'progress-stream-skipped', { mode: input.mode });
+    await runFallbackReply(input.mode, first.state, input.fallback);
     return;
   }
 

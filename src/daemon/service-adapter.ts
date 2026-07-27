@@ -42,6 +42,13 @@ export interface ServiceAdapter {
   /** Stop + disable autostart. Used by `unregister` flow. */
   stopAndDisableAutostart(): ServiceResultLike;
 
+  /**
+   * Turn off autostart on an already-stopped service, without trying to stop
+   * it again. `stop` needs this: a service that is registered but not running
+   * would otherwise keep its login-time autostart and come back by itself.
+   */
+  disableAutostart(): ServiceResultLike;
+
   /** Restart the running service in place. */
   restart(): ServiceResultLike;
 
@@ -68,11 +75,22 @@ function makeLaunchdAdapter(profile: string, runArgs: string[]): ServiceAdapter 
     isRunning: () => launchd.isLoaded(profile),
     servicePath: () => launchAgentPlistPath(profile),
     install: () => launchd.writePlist(profile, runArgs),
-    start: () => launchd.bootstrap(profile),
+    // A previous `stop` may have left the job disabled in launchd's override
+    // DB, where it would stay dead through bootstrap. Always enable first.
+    start: () => {
+      launchd.enable(profile);
+      return launchd.bootstrap(profile);
+    },
     stop: () => launchd.bootout(profile),
-    // launchd has no separate "disable" — bootout already removes the
-    // service from launchd, which also nukes KeepAlive / RunAtLoad.
-    stopAndDisableAutostart: () => launchd.bootout(profile),
+    // bootout alone is session-scoped: the plist keeps RunAtLoad=true, so
+    // launchd re-bootstraps the job at the next login. Pair it with an
+    // explicit `disable` to actually match systemd's `disable --now`.
+    stopAndDisableAutostart: () => {
+      const out = launchd.bootout(profile);
+      const disabled = launchd.disable(profile);
+      return out.ok ? disabled : out;
+    },
+    disableAutostart: () => launchd.disable(profile),
     restart: () => launchd.kickstart(profile),
     waitUntilStopped: (timeoutMs) => launchd.waitUntilUnloaded(profile, timeoutMs),
     deleteFile: () => launchd.deletePlist(profile),
@@ -98,6 +116,7 @@ function makeSystemdAdapter(profile: string, runArgs: string[]): ServiceAdapter 
     start: () => systemd.enableAndStart(profile),
     stop: () => systemd.stop(profile),
     stopAndDisableAutostart: () => systemd.disableAndStop(profile),
+    disableAutostart: () => systemd.disable(profile),
     restart: () => systemd.restart(profile),
     waitUntilStopped: (timeoutMs) => systemd.waitUntilInactive(profile, timeoutMs),
     deleteFile: async () => {
@@ -129,9 +148,15 @@ function makeSchtasksAdapter(profile: string, runArgs: string[]): ServiceAdapter
       const r = await schtasks.installTask(profile, runArgs);
       if (!r.ok) throw new Error(r.stderr || 'schtasks /Create failed');
     },
-    start: () => schtasks.runTask(profile),
+    // Mirror launchd: a previous `stop` disabled the task, and a disabled
+    // task refuses to run. Re-enable before starting it.
+    start: () => {
+      schtasks.enableTask(profile);
+      return schtasks.runTask(profile);
+    },
     stop: () => schtasks.endTask(profile),
     stopAndDisableAutostart: () => schtasks.endAndDisable(profile),
+    disableAutostart: () => schtasks.disableTask(profile),
     // schtasks has no native /Restart — adapter awaits end+wait+run.
     restart: () => schtasks.restartTask(profile),
     waitUntilStopped: (timeoutMs) => schtasks.waitUntilStopped(profile, timeoutMs),

@@ -188,9 +188,9 @@ program
 
 program
   .command('stop')
-  .description('Stop the OS-managed daemon (unload from launchd; plist stays)')
+  .description('Stop the OS-managed daemon and disable autostart (service definition stays)')
   .option('--profile <name>', 'profile name (defaults to active profile)')
-  .option('--web-ui', 'target the supervisor service instead of a per-profile one')
+  .option('--web-ui', 'target the supervisor service (auto-detected when no per-profile service exists)')
   .action(async (opts: { profile?: string; webUi?: boolean }) => {
     await runServiceStop({ profile: opts.profile, webUi: opts.webUi });
   });

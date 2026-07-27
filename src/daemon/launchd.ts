@@ -125,6 +125,27 @@ export function bootout(profile: string): LaunchctlResult {
   return runLaunchctl(['bootout', serviceTarget(profile)]);
 }
 
+/**
+ * Persistently mark the job disabled in launchd's per-user override database.
+ *
+ * `bootout` only unloads the job from the CURRENT boot session — the plist
+ * stays in ~/Library/LaunchAgents with RunAtLoad=true, so launchd bootstraps
+ * it again at the next login and the daemon silently comes back. `disable`
+ * is the only thing that survives a reboot short of deleting the plist.
+ */
+export function disable(profile: string): LaunchctlResult {
+  return runLaunchctl(['disable', serviceTarget(profile)]);
+}
+
+/**
+ * Clear a previous `disable`. A disabled job stays dead even after a
+ * successful `bootstrap`, so every start path must enable first — otherwise
+ * `stop` followed by `start` would look like it worked and never come up.
+ */
+export function enable(profile: string): LaunchctlResult {
+  return runLaunchctl(['enable', serviceTarget(profile)]);
+}
+
 /** kickstart -k: kill the running instance and start a new one. Service
  * must already be bootstrapped (loaded into launchd). */
 export function kickstart(profile: string): LaunchctlResult {

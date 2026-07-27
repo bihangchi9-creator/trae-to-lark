@@ -59,7 +59,7 @@ vi.mock('../../../src/cli/preflight', () => ({
   preFlightChecks: mocks.preFlightChecks,
 }));
 
-const { runServiceStart, runServiceStatus, runServiceUnregister } = await import('../../../src/cli/commands/service');
+const { runServiceStart, runServiceStatus, runServiceStop, runServiceUnregister } = await import('../../../src/cli/commands/service');
 
 describe('profile-aware service commands', () => {
   beforeEach(() => {
@@ -73,6 +73,7 @@ describe('profile-aware service commands', () => {
       start: vi.fn(() => ({ ok: true, stderr: '' })),
       stop: vi.fn(() => ({ ok: true, stderr: '' })),
       stopAndDisableAutostart: vi.fn(() => ({ ok: true, stderr: '' })),
+      disableAutostart: vi.fn(() => ({ ok: true, stderr: '' })),
       restart: vi.fn(() => ({ ok: true, stderr: '' })),
       waitUntilStopped: vi.fn(async () => true),
       deleteFile: vi.fn(async () => {}),
@@ -487,6 +488,63 @@ describe('profile-aware service commands', () => {
     mocks.readActiveProfile.mockResolvedValue(undefined);
     mocks.loadRootConfig.mockResolvedValue(undefined);
     await expect(runServiceStatus()).rejects.toThrow('active profile is required');
+  });
+
+  it('falls back to the supervisor service when the active profile has no service of its own', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(line);
+    });
+    // Machine installed via `start --web-ui`: only the supervisor service
+    // exists on disk, and it is the process hosting profile codex-dev.
+    const supervisor = { ...mocks.adapter, isRunning: vi.fn(() => true) } as ServiceAdapter;
+    mocks.getServiceAdapter.mockImplementation((serviceId: string) =>
+      serviceId === 'supervisor'
+        ? supervisor
+        : { ...mocks.adapter, fileExists: vi.fn(() => false) },
+    );
+    mocks.readAndPrune.mockReturnValue([]);
+
+    await runServiceStop();
+
+    // Must act on the supervisor service, not silently no-op on a
+    // per-profile service that was never installed.
+    expect(supervisor.stopAndDisableAutostart).toHaveBeenCalled();
+    expect(lines.join('\n')).toContain('已指向控制面 supervisor 服务');
+    expect(lines).toContain('✓ 控制面 supervisor 已停止运行');
+  });
+
+  it('turns off autostart when stopping a registered-but-not-running service', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(line);
+    });
+
+    // fileExists=true, isRunning=false — nothing to kill, but the login-time
+    // autostart is still armed and would bring the daemon back by itself.
+    await runServiceStop({ profile: 'codex-dev' });
+
+    expect(mocks.adapter.disableAutostart).toHaveBeenCalled();
+    expect(mocks.adapter.stopAndDisableAutostart).not.toHaveBeenCalled();
+    expect(lines).toContain('  已关闭开机自启。');
+  });
+
+  it('leaves an explicit --profile target alone even when a supervisor service exists', async () => {
+    const lines: string[] = [];
+    vi.spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(line);
+    });
+    const supervisor = { ...mocks.adapter, isRunning: vi.fn(() => true) } as ServiceAdapter;
+    const classic = { ...mocks.adapter, fileExists: vi.fn(() => false) } as ServiceAdapter;
+    mocks.getServiceAdapter.mockImplementation((serviceId: string) =>
+      serviceId === 'supervisor' ? supervisor : classic,
+    );
+
+    await runServiceStop({ profile: 'codex-dev' });
+
+    expect(supervisor.stopAndDisableAutostart).not.toHaveBeenCalled();
+    expect(classic.stopAndDisableAutostart).not.toHaveBeenCalled();
+    expect(lines).toContain('bot 还没在后台运行过,无需停止。');
   });
 
   it('allows cleanup of an explicitly named service after its profile was removed', async () => {

@@ -126,6 +126,11 @@ export function disableAndStop(profile: string): SystemctlResult {
   return runSystemctl(['disable', '--now', systemdUnitName(profile)]);
 }
 
+/** Disable autostart without touching the (already stopped) service. */
+export function disable(profile: string): SystemctlResult {
+  return runSystemctl(['disable', systemdUnitName(profile)]);
+}
+
 /** Bounce the service in place. */
 export function restart(profile: string): SystemctlResult {
   return runSystemctl(['restart', systemdUnitName(profile)]);

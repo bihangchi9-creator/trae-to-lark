@@ -230,6 +230,102 @@ describe('markdown stream startup failures', () => {
     expect(lastMarkdown(h.channel)).toContain('FINAL_ONLY_SENTINEL');
   });
 
+  it('does not repeat streamed text as the final reply when Codex held nothing back', async () => {
+    // Codex only reserves its *last* message as `final_text`; an abnormal turn
+    // end (turn.failed, or the process dying before turn.completed) flushes it
+    // as a text block instead. Those blocks are already on screen, so the
+    // dedicated final reply must not post the same words a second time.
+    const visibleProgress: string[] = [];
+    const h = await createHarness({
+      events: [
+        { type: 'text', delta: '这是答案' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          markdown?: (ctrl: { setContent(markdown: string): Promise<void> }) => Promise<void>;
+        }).markdown;
+        await producer?.({
+          setContent: vi.fn(async (markdown: string) => {
+            visibleProgress.push(markdown);
+          }),
+        });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_no_final', 'run'));
+    await waitFor(() => visibleProgress.some((markdown) => markdown.includes('这是答案')));
+    // give a (duplicate) final reply a chance to fire before asserting
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(h.channel.sent).toHaveLength(0);
+  });
+
+  it('waits for a slow-opening progress stream instead of replying alongside it', async () => {
+    // Opening a streaming card costs two API round trips. When the run finishes
+    // first, replying right away duplicates the answer verbatim — once as text,
+    // once as the card that lands a moment later.
+    const visibleProgress: string[] = [];
+    const h = await createHarness({
+      agentKind: 'claude',
+      events: [
+        { type: 'text', delta: 'ANSWER_ONCE' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          markdown?: (ctrl: { setContent(markdown: string): Promise<void> }) => Promise<void>;
+        }).markdown;
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        await producer?.({
+          setContent: vi.fn(async (markdown: string) => {
+            visibleProgress.push(markdown);
+          }),
+        });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_slow_stream', 'run'));
+    await waitFor(() => visibleProgress.some((markdown) => markdown.includes('ANSWER_ONCE')));
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(h.channel.sent).toHaveLength(0);
+  });
+
+  it('renders nothing in a progress stream it already gave up on', async () => {
+    // If the stream is still not producing after the grace window we do reply
+    // without it — but the stream must then stay empty, or the answer shows up
+    // twice as soon as it catches up.
+    const gate = deferred<void>();
+    const setContent = vi.fn(async () => {});
+    const h = await createHarness({
+      agentKind: 'claude',
+      events: [
+        { type: 'text', delta: 'ANSWER_ONCE' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          markdown?: (ctrl: { setContent(markdown: string): Promise<void> }) => Promise<void>;
+        }).markdown;
+        await gate.promise;
+        await producer?.({ setContent });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_stuck_stream', 'run'));
+    await waitFor(() => h.channel.sent.length === 1, 6000);
+    gate.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 80));
+
+    expect(lastMarkdown(h.channel)).toContain('ANSWER_ONCE');
+    expect(h.channel.sent).toHaveLength(1);
+    expect(setContent).not.toHaveBeenCalled();
+  }, 15_000);
+
   it('still sends the final reply when the progress stream fails at completion', async () => {
     const fail = vi.spyOn(log, 'fail').mockImplementation(() => {});
     const h = await createHarness({
@@ -340,6 +436,8 @@ async function createHarness(options: {
   /** One run's events, or one array per run. */
   events?: FakeAgentEvents;
   messageReply?: 'card' | 'markdown' | 'text';
+  /** Codex holds its answer back for a dedicated final reply; Claude streams it. */
+  agentKind?: 'claude' | 'codex';
 } = {}): Promise<{
   tmp: TmpProfile;
   channel: FakeLarkChannel;
@@ -352,7 +450,7 @@ async function createHarness(options: {
   const tmp = await createTmpProfile('markdown-stream-startup-failure-');
   const workspace = await realpath(tmp.workspace);
   const baseProfileConfig = createDefaultProfileConfig({
-    agentKind: 'codex',
+    agentKind: options.agentKind ?? 'codex',
     accounts: {
       app: {
         id: 'cli_test',

@@ -1090,6 +1090,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               initial: renderCard(initialState, cardRenderOptions),
               producer: async (ctrl) => {
                 producerStarted = true;
+                if (progress.abandoned()) return;
                 cardCtrl = ctrl;
                 await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
                 await renderDone;
@@ -1139,7 +1140,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           channel,
           chatId,
           scope,
-          state: finalAnswerOnlyState(filterForPrefs(latestState)),
+          state: finalReplyState(progress, filterForPrefs(latestState)),
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1155,6 +1156,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           {
             markdown: async (ctrl) => {
               producerStarted = true;
+              if (progress.abandoned()) return;
               markdownCtrl = ctrl;
               await ctrl.setContent(renderText(filterForPrefs(latestState)));
               await renderDone;
@@ -1201,7 +1203,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           channel,
           chatId,
           scope,
-          state: finalAnswerOnlyState(filterForPrefs(latestState)),
+          state: finalReplyState(progress, filterForPrefs(latestState)),
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1249,6 +1251,12 @@ interface LazyProgressStream {
   readonly settled: Promise<unknown>;
   opened(): boolean;
   ensureOpen(): void;
+  /**
+   * True once the reply went out without this stream. A producer that starts
+   * after that must render nothing, or the user gets the same answer twice.
+   */
+  abandoned(): boolean;
+  abandon(): void;
 }
 
 /**
@@ -1267,6 +1275,7 @@ function createLazyProgressStream(
   open: () => Promise<unknown>,
 ): LazyProgressStream {
   let stream: Promise<unknown> | undefined;
+  let givenUp = false;
   let settle!: (result: Promise<unknown>) => void;
   const settled = new Promise<unknown>((resolve, reject) => {
     settle = (result) => {
@@ -1281,6 +1290,10 @@ function createLazyProgressStream(
       log.info('outbound', 'progress-stream-open', { scope, mode });
       stream = open();
       settle(stream);
+    },
+    abandoned: () => givenUp,
+    abandon: () => {
+      givenUp = true;
     },
   };
 }
@@ -1306,6 +1319,32 @@ function shouldOpenProgressStream(state: RunState): boolean {
 }
 
 /**
+ * What Codex's dedicated final reply may carry, given what the progress stream
+ * already put on screen.
+ *
+ * `finalAnswerOnlyState` falls back to the run's text blocks when Codex held
+ * nothing back for the end — correct where nothing was streamed (CoT, text
+ * mode, a stream we gave up on), but those blocks are already visible once a
+ * stream rendered them, and repeating them posts the same words a second time.
+ * Codex leaves the answer in `blocks` more often than it looks: any abnormal
+ * turn end (`turn.failed`, or the process exiting before `turn.completed`)
+ * flushes the pending message as text instead of `final_text`.
+ *
+ * Terminal notices are dropped for the same reason — the stream rendered them.
+ */
+function finalReplyState(progress: LazyProgressStream, state: RunState): RunState {
+  if (!progress.opened() || progress.abandoned()) return finalAnswerOnlyState(state);
+  return {
+    ...state,
+    blocks: state.finalText ? [{ kind: 'text', content: state.finalText, streaming: false }] : [],
+    reasoning: { content: '', active: false },
+    footer: null,
+    terminal: 'done',
+    errorMsg: undefined,
+  };
+}
+
+/**
  * Backstop for a progress stream that was opened on real content and still
  * ended up empty — e.g. `/config` hiding tool calls mid-run, which retroactively
  * empties a tool-only render. The SDK fills such a card with its "(no content)"
@@ -1320,11 +1359,27 @@ async function recallIfEmptyStreamedReply(
   scope: string,
 ): Promise<void> {
   if (!progress.opened()) return;
+  // An abandoned stream renders nothing, so whatever message it eventually
+  // posts is empty by construction. It is still in flight (that is why we gave
+  // up on it), so clean up in the background instead of blocking the run on it.
+  if (progress.abandoned()) {
+    void progress.settled.then(
+      (result) => recallStreamedMessage(channel, result, scope),
+      () => {},
+    );
+    return;
+  }
   if (renderText(finalState).trim() !== '') return;
-  const result = (await progress.settled.catch(() => undefined)) as
-    | { messageId?: string }
-    | undefined;
-  const messageId = result?.messageId;
+  const result = await progress.settled.catch(() => undefined);
+  await recallStreamedMessage(channel, result, scope);
+}
+
+async function recallStreamedMessage(
+  channel: LarkChannel,
+  streamResult: unknown,
+  scope: string,
+): Promise<void> {
+  const messageId = (streamResult as { messageId?: string } | undefined)?.messageId;
   if (!messageId) return;
   try {
     await channel.recallMessage(messageId);
@@ -1606,29 +1661,45 @@ async function awaitRenderAwareStream(input: {
     return;
   }
 
-  if (!input.producerStarted()) {
+  // The run ended before the stream did. A producer that hasn't started yet is
+  // usually just a card still being created (two API round trips), so give the
+  // stream its grace window rather than replying immediately — an immediate
+  // fallback would post the same answer twice once the stream catches up.
+  const terminal = await Promise.race([
+    streamResult,
+    delay(STREAM_TERMINAL_GRACE_MS).then(() => undefined),
+  ]);
+
+  if (!terminal) {
+    if (input.producerStarted()) {
+      log.warn('stream', 'terminal-grace-expired', {
+        mode: input.mode,
+        graceMs: STREAM_TERMINAL_GRACE_MS,
+      });
+      void streamResult.then((result) => {
+        if (!result.ok) {
+          log.fail('stream', result.err, { mode: input.mode, step: 'stream-terminal-late' });
+        }
+      });
+      return;
+    }
+    // Still nothing on screen after the grace window: give up on the stream and
+    // reply without it. `abandon()` keeps a late producer from rendering the
+    // same answer again; the empty message it leaves is recalled in cleanup.
+    input.progress.abandon();
     log.warn('stream', 'producer-not-started-before-agent-terminal', { mode: input.mode });
     await runFallbackReply(input.mode, first.state, input.fallback);
     return;
   }
 
-  const terminal = await Promise.race([
-    streamResult,
-    delay(STREAM_TERMINAL_GRACE_MS).then(() => undefined),
-  ]);
-  if (!terminal) {
-    log.warn('stream', 'terminal-grace-expired', {
-      mode: input.mode,
-      graceMs: STREAM_TERMINAL_GRACE_MS,
-    });
-    void streamResult.then((result) => {
-      if (!result.ok) {
-        log.fail('stream', result.err, { mode: input.mode, step: 'stream-terminal-late' });
-      }
-    });
-    return;
+  if (!terminal.ok) {
+    // A stream that failed before producing anything delivered nothing, so the
+    // reply still has to go out; one that failed later already showed its
+    // content and the error is the caller's to handle.
+    if (input.producerStarted()) throw terminal.err;
+    log.fail('stream', terminal.err, { mode: input.mode, step: 'stream' });
+    await runFallbackReply(input.mode, first.state, input.fallback);
   }
-  if (!terminal.ok) throw terminal.err;
 }
 
 async function runFallbackReply(

@@ -7,6 +7,10 @@ import type { MutableProfileState } from '../config/config-ops';
 import consoleHtml from './generated/index.html';
 import {
   addBotToChatView,
+  meetingJoin,
+  meetingPreflight,
+  meetingLeave,
+  meetingsView,
   applyConfig,
   applyConfigToDisk,
   buildConfigView,
@@ -259,6 +263,42 @@ async function route(
     const profile = body.profile ?? (await readActiveProfile(deps.rootDir));
     if (!profile) throw new HttpError(400, 'profile is required');
     sendJson(res, 200, await addBotToChatView(profile, deps.rootDir, body));
+    return;
+  }
+
+  // --- in-meeting agent (智能体入会) ---
+  if (path === '/api/meetings' && g) {
+    const profile = url.searchParams.get('profile') ?? (await readActiveProfile(deps.rootDir));
+    if (!profile) throw new HttpError(400, 'no profile');
+    const controls = sup.controlsFor(profile);
+    // Falls back to disk config so a stopped profile still reports why it's
+    // unavailable rather than looking broken.
+    const enabled = controls
+      ? controls.profileConfig.meeting.enabled
+      : (await loadProfileState(profile, deps.rootDir)).profileConfig.meeting.enabled;
+    sendJson(res, 200, meetingsView(controls?.meeting, enabled));
+    return;
+  }
+  if (path === '/api/meetings/preflight' && g) {
+    const profile = url.searchParams.get('profile') ?? (await readActiveProfile(deps.rootDir));
+    if (!profile) throw new HttpError(400, 'no profile');
+    // The probe needs some user open_id; the bot owner is the natural choice.
+    const probeUserId = sup.controlsFor(profile)?.botOwnerId;
+    sendJson(res, 200, await meetingPreflight(profile, deps.rootDir, probeUserId));
+    return;
+  }
+  if (path === '/api/meetings/join' && p) {
+    const body = (await readJsonBody(req)) as { profile?: string; meetingNo?: string };
+    const profile = body.profile ?? (await readActiveProfile(deps.rootDir));
+    if (!profile) throw new HttpError(400, 'profile is required');
+    sendJson(res, 200, await meetingJoin(sup.controlsFor(profile)?.meeting, body));
+    return;
+  }
+  if (path === '/api/meetings/leave' && p) {
+    const body = (await readJsonBody(req)) as { profile?: string; meetingId?: string };
+    const profile = body.profile ?? (await readActiveProfile(deps.rootDir));
+    if (!profile) throw new HttpError(400, 'profile is required');
+    sendJson(res, 200, await meetingLeave(sup.controlsFor(profile)?.meeting, body));
     return;
   }
 

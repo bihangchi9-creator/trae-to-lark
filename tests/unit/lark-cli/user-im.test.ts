@@ -33,7 +33,7 @@ describe('user-im lark-cli helpers', () => {
             status: 'ready',
             available: true,
             tokenStatus: 'valid',
-            userName: '马哲',
+            userName: '测试用户',
             openId: 'ou_abc',
             scope: 'im:chat:read im:chat.members:write_only im:message',
           },
@@ -43,7 +43,7 @@ describe('user-im lark-cli helpers', () => {
     }));
     const status = await getUserAuthStatus(ctx, exec);
     expect(status.loggedIn).toBe(true);
-    expect(status.userName).toBe('马哲');
+    expect(status.userName).toBe('测试用户');
     expect(status.openId).toBe('ou_abc');
     expect(status.scopes).toContain('im:chat.members:write_only');
   });

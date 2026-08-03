@@ -165,6 +165,8 @@ export async function savePreferencesConfig(
   requireMentionInGroup: boolean,
   larkCliIdentity: ProfileConfig['larkCli']['identityPreset'],
   mode: ProfileMode,
+  /** In-meeting agent settings; omitted by callers that don't edit them. */
+  meeting?: ProfileConfig['meeting'],
 ): Promise<void> {
   const larkCli = {
     identityPreset: larkCliIdentity,
@@ -180,6 +182,7 @@ export async function savePreferencesConfig(
       state.cfg.preferences = preferences;
       state.profileConfig.larkCli = larkCli;
       state.profileConfig.mode = mode;
+      if (meeting) state.profileConfig.meeting = meeting;
       await saveConfig(state.cfg, state.configPath);
       return;
     }
@@ -198,6 +201,7 @@ export async function savePreferencesConfig(
         ...profile.access,
         requireMentionInGroup,
       },
+      ...(meeting ? { meeting } : {}),
       larkCli,
     };
     await saveRootConfig(root, state.configPath);

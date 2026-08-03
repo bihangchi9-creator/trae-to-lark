@@ -46,6 +46,9 @@ import {
   toPromptAttachment,
 } from '../media/attachment';
 import { canUseDm, canUseGroup, requireMentionForChat } from '../policy/access';
+import { MeetingManager } from '../meeting/manager';
+import type { VcRequestClient } from '../meeting/api';
+import { attachMeetingAgent, summarizeEndedMeeting } from '../meeting/orchestrator';
 import type { ScopeContext } from '../policy/run-policy';
 import { createOwnerRefreshController } from '../policy/owner';
 import { RunExecutor } from '../runtime/run-executor';
@@ -422,6 +425,46 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     },
   });
 
+  // In-meeting agent. Created before connect() so the `vc.bot.*` handlers are
+  // installed on the event dispatcher before any push can arrive; sessions are
+  // only created later (on /meeting join or an invite), so the late-bound
+  // botOpenId getter is resolved by then.
+  const meetingConfig = () => controls.profileConfig.meeting;
+  let meetingManager: MeetingManager | undefined;
+  if (meetingConfig().enabled) {
+    meetingManager = new MeetingManager({
+      client: channel.rawClient as unknown as VcRequestClient,
+      config: meetingConfig,
+      botOpenId: () => channel.botIdentity?.openId,
+      channel,
+      // Meeting over: optionally summarize to IM (config-gated inside).
+      onEnded: (session) =>
+        void summarizeEndedMeeting({
+          session,
+          channel,
+          controls,
+          executor,
+          activeRuns,
+          sessions,
+          ...(sessionCatalog ? { sessionCatalog } : {}),
+          workspaces,
+        }).catch((err) => log.warn('meeting', 'summary-failed', { err: String(err) })),
+      onSession: (session) =>
+        attachMeetingAgent({
+          session,
+          channel,
+          controls,
+          executor,
+          activeRuns,
+          sessions,
+          ...(sessionCatalog ? { sessionCatalog } : {}),
+          workspaces,
+        }),
+    });
+    meetingManager.attachPush();
+    controls.meeting = meetingManager;
+  }
+
   await channel.connect();
   const ownerRefresh = createOwnerRefreshController({
     controls,
@@ -470,6 +513,11 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       ownerRefresh.stop();
       knownChatsRefresh.stop();
       keepalive.stop();
+      // Stop meeting timers but stay in the meetings: /reconnect tears the
+      // channel down and rebuilds it, and auto-leaving every meeting on a
+      // reconnect would be surprising.
+      meetingManager?.dispose();
+      controls.meeting = undefined;
       pending.cancelAll();
       const [disconnectResult, stopAllResult, ...flushResults] = await Promise.allSettled([
         channel.disconnect(),

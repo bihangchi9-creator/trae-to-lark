@@ -18,8 +18,8 @@ describe('profile-scoped daemon paths and arguments', () => {
     expect(serviceProfileId('codex-dev')).toBe('codex-dev');
     // Non-ASCII / label-unsafe names get a deterministic ASCII-safe id.
     expect(serviceProfileId('codex dev')).toMatch(/^codex-dev-[0-9a-f]{8}$/);
-    expect(serviceProfileId('尼莫')).toMatch(/^profile-[0-9a-f]{8}$/);
-    expect(serviceProfileId('尼莫')).toBe(serviceProfileId('尼莫'));
+    expect(serviceProfileId('助手')).toMatch(/^profile-[0-9a-f]{8}$/);
+    expect(serviceProfileId('助手')).toBe(serviceProfileId('助手'));
     expect(() => serviceProfileId('.')).toThrow(/invalid profile name/i);
     expect(launchAgentLabel('codex-dev')).toContain('codex-dev');
     expect(systemdUnitName('claude')).not.toBe(systemdUnitName('codex-dev'));

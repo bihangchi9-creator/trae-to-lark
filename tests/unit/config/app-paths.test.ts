@@ -86,10 +86,10 @@ describe('resolveAppPaths', () => {
   it('accepts Unicode profile names (e.g. a Chinese bot name) as a directory segment', async () => {
     const root = await tempRoot();
 
-    const paths = resolveAppPaths({ rootDir: root, profile: '尼莫' });
+    const paths = resolveAppPaths({ rootDir: root, profile: '助手' });
 
-    expect(paths.profile).toBe('尼莫');
-    expect(paths.profileDir).toBe(join(root, 'profiles', '尼莫'));
-    expect(paths.profileLockFile).toBe(join(root, 'registry', 'locks', 'profile', '尼莫.lock'));
+    expect(paths.profile).toBe('助手');
+    expect(paths.profileDir).toBe(join(root, 'profiles', '助手'));
+    expect(paths.profileLockFile).toBe(join(root, 'registry', 'locks', 'profile', '助手.lock'));
   });
 });

@@ -11,7 +11,7 @@ import { writeNewProfile } from './onboard';
 
 /**
  * Turn an arbitrary app/bot name into a valid profile name (or '' if none).
- * Keeps Unicode letters (so a Chinese bot name like 尼莫 becomes the profile
+ * Keeps Unicode letters (so a non-ASCII bot name becomes the profile
  * name directly); only strips characters unsafe as a path segment — matching
  * what `normalizeProfileName` accepts.
  */
@@ -20,7 +20,7 @@ function sanitizeProfileName(name: string): string {
     name
       .trim()
       // Strip only chars unsafe as a path segment (matches normalizeProfileName);
-      // keep Unicode letters so a Chinese bot name like 尼莫 stays as-is.
+      // keep Unicode letters so a non-ASCII bot name stays as-is.
       // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u001f\s/\\:*?"<>|]+/g, '-')
       .replace(/^[-.]+|[-.]+$/g, '')

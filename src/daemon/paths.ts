@@ -25,7 +25,7 @@ export function serviceProfileId(profile: string): string {
   if (!trimmed) throw new Error('profile name is required for service id');
   if (trimmed === '.' || trimmed === '..') throw new Error(`invalid profile name: ${profile}`);
   // ASCII-safe names pass through unchanged so existing service labels/paths
-  // stay stable. Names with non-ASCII (e.g. Chinese 尼莫) or other OS-label-
+  // stay stable. Names with non-ASCII characters or other OS-label-
   // unsafe chars get a deterministic ASCII-safe, unique id (sanitized base +
   // short hash) so any profile can still be installed as an OS daemon.
   if (/^[A-Za-z0-9._-]+$/.test(trimmed)) return trimmed;

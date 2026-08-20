@@ -1,6 +1,6 @@
 import { ClaudeAdapter } from '../agent/claude/adapter';
 import { CodexAdapter } from '../agent/codex/adapter';
-import { AgentPreflightError, type AgentAvailability } from '../agent/preflight';
+import { AgentPreflightError, type AgentAvailability, type LocalAgentId } from '../agent/preflight';
 import type { AgentAdapter } from '../agent/types';
 import type { AppPaths } from '../config/app-paths';
 import type { AgentKind, ProfileConfig } from '../config/profile-schema';
@@ -33,13 +33,15 @@ export function createRuntimeAgent(
             : {}),
         }
       : undefined;
-  if (profileConfig.agentKind === 'codex') {
+  if (profileConfig.agentKind === 'codex' || profileConfig.agentKind === 'trae') {
     const codex = profileConfig.codex;
     if (!codex?.binaryPath) {
-      throw new Error('codex profile requires codex.binaryPath');
+      throw new Error(`${profileConfig.agentKind} profile requires codex.binaryPath`);
     }
+    const isTrae = profileConfig.agentKind === 'trae';
     return new CodexAdapter({
       binary: codex.binaryPath,
+      ...(isTrae ? { agentId: 'trae' as const, displayName: 'TRAE CLI' } : {}),
       profileStateDir: appPaths.profileDir,
       ...(codex.codexHome ? { codexHome: codex.codexHome } : {}),
       inheritCodexHome: codex.inheritCodexHome === true,
@@ -56,11 +58,14 @@ export async function checkRuntimeAgentAvailability(agent: AgentAdapter): Promis
   if (agent.checkAvailability) return agent.checkAvailability();
   const ok = await agent.isAvailable();
   if (ok) return { ok: true };
+  const agentId: LocalAgentId =
+    agent.id === 'codex' || agent.id === 'trae' || agent.id === 'claude' ? agent.id : 'claude';
+  const command = agentId === 'trae' ? 'traex' : agentId;
   const diagnostic = {
     code: 'agent-binary-not-found' as const,
-    agentId: agent.id === 'codex' ? ('codex' as const) : ('claude' as const),
+    agentId,
     agentName: agent.displayName,
-    command: agent.id === 'codex' ? 'codex' : 'claude',
+    command,
   };
   return { ok: false, diagnostic, error: new AgentPreflightError(diagnostic) };
 }

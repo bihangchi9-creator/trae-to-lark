@@ -1,7 +1,8 @@
 {
-  "name": "lark-channel-bridge",
+  "name": "trae-to-lark",
   "version": "0.7.0",
-  "description": "Bridge Feishu/Lark messenger with local CLI coding agents",
+  "description": "Bridge Feishu/Lark messenger with local CLI coding agents (Claude Code, Codex, TRAE CLI)",
+  "author": "bihangchi",
   "type": "module",
   "packageManager": "pnpm@10.33.0",
   "publishConfig": {
@@ -10,13 +11,14 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/zarazhangrui/feishu-claude-code-bridge.git"
+    "url": "git+https://github.com/bihangchi9-creator/trae-to-lark.git"
   },
   "bugs": {
-    "url": "https://github.com/zarazhangrui/feishu-claude-code-bridge/issues"
+    "url": "https://github.com/bihangchi9-creator/trae-to-lark/issues"
   },
-  "homepage": "https://github.com/zarazhangrui/feishu-claude-code-bridge#readme",
+  "homepage": "https://github.com/bihangchi9-creator/trae-to-lark#readme",
   "bin": {
+    "trae-to-lark": "./bin/trae-to-lark.mjs",
     "lark-channel-bridge": "./bin/lark-channel-bridge.mjs"
   },
   "exports": {
@@ -104,6 +106,9 @@
     "claude",
     "claude-code",
     "codex",
+    "trae",
+    "trae-cli",
+    "traex",
     "cli",
     "channel",
     "bridge"

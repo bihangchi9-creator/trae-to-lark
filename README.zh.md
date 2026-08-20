@@ -1,19 +1,20 @@
-# lark-channel-bridge
+# trae-to-lark
 
-把飞书 / Lark 消息和本地 Claude Code 或 Codex CLI 打通的轻量 bot。用一条命令启动，扫码绑定 PersonalAgent 应用，然后在飞书里和本机编程助手对话，让它读图、处理文件、改代码。
+把飞书 / Lark 消息和本地 **TRAE CLI（`traex`）**、Claude Code 或 Codex CLI 打通的轻量 bot。用一条命令启动，扫码绑定 PersonalAgent 应用，然后在飞书里和本机编程助手对话，让它读图、处理文件、改代码。
+
+> 本项目 fork 自 [lark-coding-agent-bridge](https://github.com/zarazhangrui/lark-coding-agent-bridge)（原名 `feishu-claude-code-bridge`，作者 [zarazhangrui](https://github.com/zarazhangrui)），在其基础上二次创作，新增了 **TRAE CLI（`traex`）作为第一类 agent**，与 Claude Code、Codex 平级。TRAE 是 Codex 的 fork，复用同一套会话 / 事件协议，只在二进制名、显示名、模型目录上分叉。详见 [致谢](#致谢)。
 
 [English README](./README.md)
 
-关于能实现的效果，详情可以阅读[飞书文档](https://larkcommunity.feishu.cn/docx/OaRIdFIRFoLM3xxTmKwcetHqn5e)
-
 ## 主要功能
 
-- 在飞书私聊直接发消息，或在群里 `@bot`，把任务转给本机 Claude Code / Codex CLI。
+- 在飞书私聊直接发消息，或在群里 `@bot`，把任务转给本机 TRAE CLI / Claude Code / Codex CLI。
 - **流式卡片**：文本回复和工具调用实时更新在同一张卡片上。
 - **COT 过程消息**：可选先发一条过程消息展示 agent 的阶段性文本和工具调用，再单独发送最终答案。
 - **会话延续**：每个聊天、话题或文档评论有自己的会话，不会互相串。
 - **排队与消息合并**：短时间连续发送的消息会合并处理；任务运行中收到的普通消息会排队到下一轮，`/new`、`/cd`、`/ws use`、`/stop` 这类命令可以中断当前任务。
 - **多工作空间**：用 `/cd` 切换当前项目，用 `/ws` 保存和复用常用项目目录。
+- **按群选模型**：用 `/model` 给每个群 / 话题单独指定模型，互不影响；未设置时回落 `/config` 的全局默认。
 - **图片 / 文件**：直接发给 bot，bridge 下载到本地后交给本机 agent 处理。
 - **卡片按钮**：`/help`、`/ws list`、`/status` 返回可点击的交互卡片。
 
@@ -21,6 +22,7 @@
 
 - Node.js **>= 20.12.0**
 - 本机至少安装并登录一个 agent：
+  - TRAE CLI：`traex`（默认命令，可用 `LARK_CHANNEL_TRAE_BIN` 覆盖二进制路径）
   - Claude Code：`claude`，安装说明：https://docs.anthropic.com/en/docs/claude-code/quickstart
   - Codex CLI：`codex`，安装说明：https://developers.openai.com/codex/cli
 - 一个飞书 / Lark PersonalAgent 应用。首次启动的扫码向导可以帮你创建并绑定。
@@ -28,15 +30,17 @@
 ## 安装
 
 ```bash
-npm i -g lark-channel-bridge
+npm i -g trae-to-lark
 # 或
-pnpm add -g lark-channel-bridge
+pnpm add -g trae-to-lark
 ```
+
+> 全局安装后会得到 `trae-to-lark` 命令（同时保留 `lark-channel-bridge` 作为向后兼容别名，两者等价）。
 
 ## 首次启动
 
 ```bash
-lark-channel-bridge run
+trae-to-lark run
 ```
 
 第一次运行会进入扫码向导：
@@ -44,7 +48,7 @@ lark-channel-bridge run
 1. 终端渲染二维码。
 2. 用飞书 App 扫码。
 3. 选择或创建 PersonalAgent 应用。
-4. 如果终端提示，选择本次要初始化的 agent。
+4. 如果终端提示，选择本次要初始化的 agent（`claude` / `codex` / `trae`）。
 5. 成功后配置写入 `~/.lark-channel/config.json`。
 
 没有指定项目目录也可以启动。bridge 会创建一个 profile 托管的默认工作目录；启动后在飞书里发送 `/cd <path>` 切到实际项目。
@@ -52,21 +56,39 @@ lark-channel-bridge run
 如果已经有 PersonalAgent app，可以在初始化时传 `--app-id` 跳过创建应用流程；命令会提示输入 App Secret。
 
 ```bash
-lark-channel-bridge run --app-id cli_xxx
+trae-to-lark run --app-id cli_xxx
 # 或直接初始化并启动后台服务
-lark-channel-bridge start --app-id cli_xxx
+trae-to-lark start --app-id cli_xxx
 ```
 
 Lark 国际版应用可加 `--tenant lark`。
+
+## 用 TRAE CLI 接入（本项目新增）
+
+TRAE 与 Codex 共享会话模型，接入方式一致，只是 `--agent` 传 `trae`：
+
+```bash
+# 前台调试：初始化一个专用于 traex 的 profile 并启动
+trae-to-lark run --profile trae --agent trae
+
+# 若本机 traex 不在 PATH，用环境变量指定二进制路径
+LARK_CHANNEL_TRAE_BIN=/path/to/traex trae-to-lark run --profile trae --agent trae
+
+# 确认收发正常后，转为后台常驻
+trae-to-lark start --profile trae --agent trae
+trae-to-lark status --profile trae
+```
+
+接入成功后，在飞书里发送 `/status`，会显示 `agent: TRAE CLI (trae)`。消息、流式卡片、`/resume` 全部走 Codex 家族共享链路。
 
 ## 后台运行
 
 `run` 适合首次配置和前台调试。确认 bot 能正常收发消息后，先用 `Ctrl-C` 停掉前台进程，再用系统服务常驻后台：
 
 ```bash
-lark-channel-bridge start
-lark-channel-bridge status
-lark-channel-bridge stop
+trae-to-lark start
+trae-to-lark status
+trae-to-lark stop
 ```
 
 服务层命令必须先全局安装，不能直接用 `npx`。daemon 的 launchd plist / systemd unit / Windows 任务会记录 bridge CLI 的路径；如果这个路径来自 npm 临时缓存，缓存清掉后 daemon 就起不来。`run` 用 `npx` 单次启动没问题。
@@ -74,11 +96,11 @@ lark-channel-bridge stop
 服务层命令按 profile 注册，每个 profile 有独立服务：
 
 ```bash
-lark-channel-bridge start [--profile <name>]
-lark-channel-bridge stop [--profile <name>]
-lark-channel-bridge restart [--profile <name>]
-lark-channel-bridge status [--profile <name>]
-lark-channel-bridge unregister [--profile <name>]
+trae-to-lark start [--profile <name>]
+trae-to-lark stop [--profile <name>]
+trae-to-lark restart [--profile <name>]
+trae-to-lark status [--profile <name>]
+trae-to-lark unregister [--profile <name>]
 ```
 
 平台映射：
@@ -88,20 +110,21 @@ lark-channel-bridge unregister [--profile <name>]
 
 daemon 日志在 `~/.lark-channel/profiles/<profile>/logs/daemon/`。
 
-### 多 profile：分别运行 Claude 和 Codex
+### 多 profile：分别运行 TRAE / Claude / Codex
 
-默认情况下，bridge 使用当前激活的 profile；可以通过 `profile use <name>` 切换。每个 profile 会维护独立的应用凭据、会话、工作目录和日志。只有在需要同时连接多个 PersonalAgent 应用，或分别运行 Claude 和 Codex 时，才需要创建多个 profile：
+默认情况下，bridge 使用当前激活的 profile；可以通过 `profile use <name>` 切换。每个 profile 会维护独立的应用凭据、会话、工作目录和日志。只有在需要同时连接多个 PersonalAgent 应用，或分别运行 TRAE、Claude、Codex 时，才需要创建多个 profile：
 
 ```bash
-lark-channel-bridge start --profile claude --agent claude
-lark-channel-bridge start --profile codex --agent codex
+trae-to-lark start --profile trae --agent trae
+trae-to-lark start --profile claude --agent claude
+trae-to-lark start --profile codex --agent codex
 ```
 
-例如只重启 Codex bot：
+例如只重启 TRAE bot：
 
 ```bash
-lark-channel-bridge restart --profile codex
-lark-channel-bridge status --profile codex
+trae-to-lark restart --profile trae
+trae-to-lark status --profile trae
 ```
 
 ## 命令速查
@@ -109,24 +132,25 @@ lark-channel-bridge status --profile codex
 ### 宿主 CLI
 
 ```text
-lark-channel-bridge run [--profile <name>] [--agent claude|codex] [--workspace <path>] [-c <config>]
-lark-channel-bridge migrate [--profile <name>] [--agent claude|codex]
-lark-channel-bridge ps
-lark-channel-bridge kill <id|#>
-lark-channel-bridge --help
+trae-to-lark run [--profile <name>] [--agent claude|codex|trae] [--workspace <path>] [-c <config>]
+trae-to-lark migrate [--profile <name>] [--agent claude|codex|trae]
+trae-to-lark ps
+trae-to-lark kill <id|#>
+trae-to-lark --help
 ```
 
 `profile use <name>` 会切换后续默认启动使用的 profile。需要同时跑 Claude / Codex 两个 bot、连接多套 PersonalAgent 应用，或做脚本化部署时，再使用这些 profile 管理命令：
 
 ```bash
-lark-channel-bridge profile create claude --agent claude
-lark-channel-bridge profile create codex --agent codex
-lark-channel-bridge profile list
-lark-channel-bridge profile use <name>
-lark-channel-bridge profile remove <name>
-lark-channel-bridge profile remove <name> --purge --yes
-lark-channel-bridge profile export <name> [--output ./profile.json] [--force]
-lark-channel-bridge profile export <name> --include-secrets --yes
+trae-to-lark profile create claude --agent claude
+trae-to-lark profile create codex --agent codex
+trae-to-lark profile create trae --agent trae
+trae-to-lark profile list
+trae-to-lark profile use <name>
+trae-to-lark profile remove <name>
+trae-to-lark profile remove <name> --purge --yes
+trae-to-lark profile export <name> [--output ./profile.json] [--force]
+trae-to-lark profile export <name> --include-secrets --yes
 ```
 
 `profile remove` 默认归档本地状态，也可以删除当前激活的 profile。若还剩其他 profile，会自动切到下一个；若这是最后一个 profile，会清空 root config，之后可以用同名重新创建。只有加 `--purge --yes` 才会永久删除。`profile export` 默认脱敏 app secret；只有加 `--include-secrets --yes` 才会导出敏感配置。
@@ -143,8 +167,11 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 | `/ws save <name>` | 把当前工作目录保存为命名工作空间 |
 | `/ws use <name>` | 切换到命名工作空间 |
 | `/ws remove <name>` | 删除命名工作空间 |
+| `/model` | 查看当前 chat 生效的模型和可选列表 |
+| `/model <序号\|id>` | 只给当前 chat（群/话题）设置模型，不影响其它 chat |
+| `/model reset` | 清除当前 chat 的模型覆盖，回落 `/config` 的全局默认 |
 | `/resume` | 恢复同 agent、工作目录、权限模式兼容的历史会话 |
-| `/status` | 查看 profile、agent、工作目录、会话、lark-cli 身份和运行状态 |
+| `/status` | 查看 profile、agent、模型、工作目录、会话、lark-cli 身份和运行状态 |
 | `/config` | 调整展示偏好、访问控制和 lark-cli 身份策略 |
 | `/invite user @某人` | 允许用户私聊使用 bot |
 | `/invite admin @某人` | 添加访问控制管理员 |
@@ -330,13 +357,13 @@ pnpm build
 想接自己的监控时，用环境变量指向一个 default export（或导出 `createAdapter`）`AdapterFactory` 的模块：
 
 ```bash
-LARK_CHANNEL_TELEMETRY_MODULE=your-telemetry-package lark-channel-bridge start
+LARK_CHANNEL_TELEMETRY_MODULE=your-telemetry-package trae-to-lark start
 ```
 
 该模块会收到每一条 `log.*` 事件，以及错误 / 指标钩子，转发到任何你想要的地方。接口从包根导出：
 
 ```ts
-import type { AdapterFactory, TelemetryAdapter, TelemetryEvent } from 'lark-channel-bridge';
+import type { AdapterFactory, TelemetryAdapter, TelemetryEvent } from 'trae-to-lark';
 
 const createAdapter: AdapterFactory = (meta) => ({
   emit(event) {/* 上报事件 */},
@@ -349,8 +376,10 @@ export default createAdapter;
 
 模块不存在、工厂函数不合法、或者 adapter 抛错，都会降级为空操作——遥测永远不会阻止 bridge 启动，也不会打断日志。
 
+## 致谢
+
+`trae-to-lark` fork 自 [lark-coding-agent-bridge](https://github.com/zarazhangrui/lark-coding-agent-bridge)（原名 `feishu-claude-code-bridge`，作者 [zarazhangrui](https://github.com/zarazhangrui)）。本 fork 新增了 TRAE CLI 支持及相关改动。原始代码依旧沿用其 MIT 许可；完整版权链见 [LICENSE](./LICENSE)。
+
 ## 许可
 
 [MIT](./LICENSE)
-
-<img src="./assets/feedback-group-qr.png" alt="飞书反馈群二维码" width="360">

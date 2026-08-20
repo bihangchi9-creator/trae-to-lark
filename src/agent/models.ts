@@ -1,4 +1,6 @@
 import type { AgentKind } from '../config/profile-schema';
+import { spawnProcess } from '../platform/spawn';
+import { log } from '../core/logger';
 
 /**
  * Sentinel selection meaning "don't pass `--model`; let the agent CLI /
@@ -43,9 +45,106 @@ const CODEX_MODELS: ModelOption[] = [
   { value: 'o3', label: 'o3' },
 ];
 
+/**
+ * TRAE CLI (`traex`) models. The real catalog is account-specific — internal
+ * and external accounts expose different model ids — so it's discovered at
+ * runtime by {@link refreshTraeModels} (which runs `traex models` at startup).
+ * This hardcoded list is only the fallback used before / if that probe runs,
+ * and is intentionally kept to just the "follow default" sentinel so no
+ * account's private model ids are baked into the published source.
+ */
+const TRAE_MODELS: ModelOption[] = [
+  { value: DEFAULT_MODEL, label: '跟随默认（不指定）' },
+];
+
+/**
+ * Runtime-discovered TRAE model list, filled once at startup by
+ * {@link refreshTraeModels}. `undefined` means "not probed yet / probe failed",
+ * in which case we fall back to the hardcoded {@link TRAE_MODELS}. This keeps
+ * external users (whose account may expose a different / smaller catalog than
+ * the pinned list) from seeing internal-only ids they can't actually use.
+ */
+let traeModelsOverride: ModelOption[] | undefined;
+
 /** The model picker options for a profile's agent kind. */
 export function supportedModels(agentKind: AgentKind): ModelOption[] {
-  return agentKind === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+  if (agentKind === 'codex') return CODEX_MODELS;
+  if (agentKind === 'trae') return traeModelsOverride ?? TRAE_MODELS;
+  return CLAUDE_MODELS;
+}
+
+/**
+ * Probe `traex models` and replace the picker list with the account's actual
+ * catalog. Best-effort: any failure (missing binary, timeout, empty output)
+ * leaves the hardcoded fallback in place. Safe to call more than once.
+ */
+export async function refreshTraeModels(
+  command: string,
+  options: { timeoutMs?: number } = {},
+): Promise<ModelOption[] | undefined> {
+  const timeoutMs = options.timeoutMs ?? 8000;
+  let stdout = '';
+  try {
+    stdout = await new Promise<string>((resolve, reject) => {
+      let out = '';
+      let settled = false;
+      const child = spawnProcess(command, ['models'], {
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        finish(() => reject(new Error('traex models timed out')));
+      }, timeoutMs);
+      child.stdout?.on('data', (chunk: Buffer) => {
+        out += chunk.toString('utf8');
+      });
+      child.once('error', (err) => finish(() => reject(err)));
+      child.once('exit', (code, signal) => {
+        finish(() => {
+          if (signal) return reject(new Error(`traex models signaled ${signal}`));
+          if (code !== 0) return reject(new Error(`traex models exited ${code}`));
+          resolve(out);
+        });
+      });
+    });
+  } catch (err) {
+    log.warn('models', 'trae-probe-failed', { err: String(err) });
+    return undefined;
+  }
+
+  const ids = stdout
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line && !line.includes(' '));
+  if (ids.length === 0) {
+    log.warn('models', 'trae-probe-empty', {});
+    return undefined;
+  }
+
+  const seen = new Set<string>();
+  const options_: ModelOption[] = [{ value: DEFAULT_MODEL, label: '跟随默认（不指定）' }];
+  for (const id of ids) {
+    if (id === DEFAULT_MODEL || seen.has(id)) continue;
+    seen.add(id);
+    // Label with the raw id — the account's live catalog is the source of
+    // truth, and we deliberately keep no hardcoded id→label map (see
+    // TRAE_MODELS) so no private model names live in the published source.
+    options_.push({ value: id, label: id });
+  }
+  traeModelsOverride = options_;
+  log.info('models', 'trae-probe-ok', { count: options_.length - 1 });
+  return options_;
+}
+
+/** Reset the dynamic TRAE catalog back to the hardcoded fallback (tests). */
+export function resetTraeModelsOverride(): void {
+  traeModelsOverride = undefined;
 }
 
 /** True when the selection means "use the agent default" (no `--model`). */

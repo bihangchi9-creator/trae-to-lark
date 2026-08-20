@@ -6,10 +6,14 @@ import { writeFileAtomic } from '../platform/atomic-write';
 interface WorkspaceData {
   chats: Record<string, { cwd: string }>;
   named: Record<string, string>;
+  /** Per-scope model override. Keyed by the same scope id as `chats`.
+   * When absent, run-flow falls back to the profile-global
+   * `preferences.model`. Stores the picker `value` (may be `default`). */
+  models: Record<string, string>;
 }
 
 export class WorkspaceStore {
-  private data: WorkspaceData = { chats: {}, named: {} };
+  private data: WorkspaceData = { chats: {}, named: {}, models: {} };
   private saving: Promise<void> = Promise.resolve();
   private readonly path: string;
 
@@ -24,6 +28,7 @@ export class WorkspaceStore {
       this.data = {
         chats: parsed.chats ?? {},
         named: parsed.named ?? {},
+        models: parsed.models ?? {},
       };
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
@@ -72,6 +77,23 @@ export class WorkspaceStore {
   removeNamed(name: string): boolean {
     if (!(name in this.data.named)) return false;
     delete this.data.named[name];
+    this.schedulePersist();
+    return true;
+  }
+
+  /** Per-scope model override, or undefined to fall back to the global pref. */
+  modelFor(scope: string): string | undefined {
+    return this.data.models[scope];
+  }
+
+  setModel(scope: string, model: string): void {
+    this.data.models[scope] = model;
+    this.schedulePersist();
+  }
+
+  removeModel(scope: string): boolean {
+    if (!(scope in this.data.models)) return false;
+    delete this.data.models[scope];
     this.schedulePersist();
     return true;
   }

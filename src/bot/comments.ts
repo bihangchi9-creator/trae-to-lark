@@ -2,11 +2,12 @@ import { randomUUID } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { CommentEvent, LarkChannel } from '@larksuite/channel';
-import { claudeCapability, codexCapability } from '../agent/capability';
+import { agentCapability } from '../agent/capability';
 import type { AgentAdapter, AgentEvent } from '../agent/types';
 import { getAgentStopGraceMs } from '../config/schema';
 import type { Controls } from '../commands';
 import { resolveAppPaths } from '../config/app-paths';
+import { isCodexFamily } from '../config/profile-schema';
 import { log } from '../core/logger';
 import { evaluateRunPolicy } from '../policy/run-policy';
 import { resolveWorkingDirectory } from '../policy/workspace';
@@ -186,10 +187,7 @@ export async function handleCommentMention(deps: CommentDeps): Promise<void> {
     : false;
 
   try {
-    const capability =
-      controls.profileConfig.agentKind === 'codex'
-        ? codexCapability(controls.profileConfig)
-        : claudeCapability(controls.profileConfig);
+    const capability = agentCapability(controls.profileConfig);
     const runTimeoutMs = commentRunTimeoutMs(sessions, runScopeId);
     const threadTimeoutMs = commentRunTimeoutMs(sessions, commentThreadScopeId);
     const commentTimeoutMs = runTimeoutMs !== undefined ? runTimeoutMs : threadTimeoutMs;
@@ -247,7 +245,7 @@ export async function handleCommentMention(deps: CommentDeps): Promise<void> {
           ? sessions.resumeFor(docSessionScopeId, cwdRealpath) ??
             sessions.resumeFor(legacyDocSessionScopeId, cwdRealpath)
           : undefined;
-      const threadId = capability.agentId === 'codex' ? catalogEntry?.threadId : undefined;
+      const threadId = isCodexFamily(capability.agentId) ? catalogEntry?.threadId : undefined;
       log.info('comment', 'session', {
         commentScopeId: runScopeId,
         sessionScopeId: agentSessionScopeId,

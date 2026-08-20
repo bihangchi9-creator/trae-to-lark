@@ -100,6 +100,54 @@ describe('IM run flow', () => {
     expect(h.agent.runOptions[0]?.cwd).toBe(workspaceRealpath);
   });
 
+  it('prefers a per-scope model override over the profile-global preference', async () => {
+    const h = await createHarness();
+    h.workspaces.setCwd('chat-1', h.tmp.workspace);
+    // Global default is opusplan; this chat overrides to a concrete opus id.
+    h.profileConfig.preferences.model = 'opusplan';
+    h.workspaces.setModel('chat-1', 'claude-opus-4-8');
+
+    const result = await startRunFlow({
+      scopeId: 'chat-1',
+      scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'hello',
+      attachments: [],
+      access: { ok: true, reason: 'allowed-user' },
+      capability: claudeCapability(h.profileConfig),
+      profileConfig: h.profileConfig,
+      sessions: h.sessions,
+      workspaces: h.workspaces,
+      executor: h.executor,
+      now: 1000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(h.agent.runOptions[0]?.model).toBe('claude-opus-4-8');
+  });
+
+  it('falls back to the global model when a scope has no override', async () => {
+    const h = await createHarness();
+    h.workspaces.setCwd('chat-1', h.tmp.workspace);
+    h.profileConfig.preferences.model = 'claude-sonnet-5';
+
+    const result = await startRunFlow({
+      scopeId: 'chat-1',
+      scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'hello',
+      attachments: [],
+      access: { ok: true, reason: 'allowed-user' },
+      capability: claudeCapability(h.profileConfig),
+      profileConfig: h.profileConfig,
+      sessions: h.sessions,
+      workspaces: h.workspaces,
+      executor: h.executor,
+      now: 1000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(h.agent.runOptions[0]?.model).toBe('claude-sonnet-5');
+  });
+
 });
 
 async function createHarness(options: { defaultWorkspace?: boolean } = {}): Promise<{

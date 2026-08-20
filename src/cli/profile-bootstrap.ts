@@ -1,7 +1,11 @@
 import { mkdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
-import { AgentPreflightError } from '../agent/preflight';
-import { createDefaultProfileConfig, type AgentKind, type ProfileConfig } from '../config/profile-schema';
+import { AgentPreflightError, type LocalAgentId } from '../agent/preflight';
+import {
+  createDefaultProfileConfig,
+  type AgentKind,
+  type ProfileConfig,
+} from '../config/profile-schema';
 import type { AppConfig } from '../config/schema';
 import { resolveWorkingDirectory } from '../policy/workspace';
 import { resolveExecutablePath } from './agent-detection';
@@ -26,8 +30,8 @@ export async function createBootstrapProfileConfig(
       ? await ensureManagedDefaultWorkspace(input.defaultWorkspace)
       : undefined;
   const codex =
-    input.agentKind === 'codex'
-      ? await createBootstrapCodexConfig(input.codexBinaryPath)
+    input.agentKind === 'codex' || input.agentKind === 'trae'
+      ? await createBootstrapCodexConfig(input.codexBinaryPath, input.agentKind)
       : undefined;
   const profile = createDefaultProfileConfig({
     agentKind: input.agentKind,
@@ -59,8 +63,40 @@ async function ensureManagedDefaultWorkspace(path: string): Promise<string> {
   return realpath(path);
 }
 
-export async function createBootstrapCodexConfig(binaryPath: string | undefined) {
-  const command = binaryPath ?? process.env.LARK_CHANNEL_CODEX_BIN ?? 'codex';
+/**
+ * Per-agent binary discovery descriptor for the Codex-family kinds. TRAE CLI
+ * (`traex`) is a Codex fork sharing the same CodexConfig shape, so both flow
+ * through the same bootstrap path and only differ by default command, env
+ * override, and diagnostic identity.
+ */
+interface CodexFamilyBinaryDescriptor {
+  agentId: LocalAgentId;
+  agentName: string;
+  defaultCommand: string;
+  envVar: string;
+}
+
+const CODEX_FAMILY_BINARIES: Record<'codex' | 'trae', CodexFamilyBinaryDescriptor> = {
+  codex: {
+    agentId: 'codex',
+    agentName: 'Codex CLI',
+    defaultCommand: 'codex',
+    envVar: 'LARK_CHANNEL_CODEX_BIN',
+  },
+  trae: {
+    agentId: 'trae',
+    agentName: 'TRAE CLI',
+    defaultCommand: 'traex',
+    envVar: 'LARK_CHANNEL_TRAE_BIN',
+  },
+};
+
+export async function createBootstrapCodexConfig(
+  binaryPath: string | undefined,
+  agentKind: 'codex' | 'trae' = 'codex',
+) {
+  const descriptor = CODEX_FAMILY_BINARIES[agentKind];
+  const command = binaryPath ?? process.env[descriptor.envVar] ?? descriptor.defaultCommand;
   let resolvedBinary: string;
   try {
     resolvedBinary = await resolveExecutablePath(command);
@@ -68,8 +104,8 @@ export async function createBootstrapCodexConfig(binaryPath: string | undefined)
     const errno = (err as NodeJS.ErrnoException).code;
     throw new AgentPreflightError({
       code: codexBootstrapBinaryErrorCode(errno),
-      agentId: 'codex',
-      agentName: 'Codex CLI',
+      agentId: descriptor.agentId,
+      agentName: descriptor.agentName,
       command,
       binaryPath: command,
       errno,

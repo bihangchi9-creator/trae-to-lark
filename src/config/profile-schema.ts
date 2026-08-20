@@ -13,9 +13,23 @@ import {
   type PermissionSource,
 } from './permissions';
 
-export type AgentKind = 'claude' | 'codex';
+export type AgentKind = 'claude' | 'codex' | 'trae';
 export type SandboxMode = CodexSandboxMode;
 export type { AccessMode, PermissionConfig, PermissionSource };
+
+/**
+ * TRAE CLI (`traex`) is a fork of Codex CLI: its `exec` interface, JSONL event
+ * stream, `CODEX_HOME` auth, and thread/resume session model are identical. The
+ * bridge therefore reuses the Codex runtime machinery (CodexConfig, argv
+ * builder, JSONL translator, thread-based resume) for both kinds and only
+ * differs on binary, display name, and model catalog. Every runtime guard that
+ * selects Codex-family behavior (thread vs session, resume, capability,
+ * streaming semantics) must go through this helper so `'trae'` is never
+ * silently treated as `'claude'`.
+ */
+export function isCodexFamily(agentKind: AgentKind | undefined): boolean {
+  return agentKind === 'codex' || agentKind === 'trae';
+}
 
 export interface ProfileAccess {
   allowedUsers: string[];
@@ -248,12 +262,12 @@ export function normalizeProfileConfig(input: unknown): ProfileConfig {
   if (raw.schemaVersion !== 2) {
     throw new Error('profile schemaVersion must be 2');
   }
-  if (raw.agentKind !== 'claude' && raw.agentKind !== 'codex') {
-    throw new Error('agentKind must be claude or codex');
+  if (raw.agentKind !== 'claude' && raw.agentKind !== 'codex' && raw.agentKind !== 'trae') {
+    throw new Error('agentKind must be claude, codex, or trae');
   }
   const accounts = normalizeAccounts(raw.accounts);
-  if (raw.agentKind === 'codex' && !raw.codex) {
-    throw new Error('codex profile requires codex configuration');
+  if (isCodexFamily(raw.agentKind) && !raw.codex) {
+    throw new Error(`${raw.agentKind} profile requires codex configuration`);
   }
 
   const preferences = normalizePreferences(raw.preferences);

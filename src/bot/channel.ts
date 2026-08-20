@@ -5,7 +5,7 @@ import type {
 } from '@larksuite/channel';
 import { createLarkChannel } from '@larksuite/channel';
 import { dirname, join } from 'node:path';
-import { claudeCapability, codexCapability } from '../agent/capability';
+import { agentCapability } from '../agent/capability';
 import { modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
 import {
   buildAgentPrompt,
@@ -39,6 +39,7 @@ import {
   getShowToolCalls,
 } from '../config/schema';
 import { resolveAppSecret } from '../config/secret-resolver';
+import { isCodexFamily } from '../config/profile-schema';
 import { log, reportMetric, withTrace } from '../core/logger';
 import { MediaCache, type LocalAttachment } from '../media/cache';
 import {
@@ -901,7 +902,8 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   // changed. `requestedModel` (the `--model` value, or undefined for default)
   // is reused below to log requested-vs-actual against the init event.
   const agentKind = controls.profileConfig.agentKind;
-  const modelPref = controls.profileConfig.preferences.model;
+  const modelPref =
+    workspaces.modelFor(scope) ?? controls.profileConfig.preferences.model;
   const modelSelection = normalizeModelSelection(agentKind, modelPref);
   const requestedModel = resolveModelArg(agentKind, modelPref);
   const prevModel = lastRunModelByScope.get(scope);
@@ -955,10 +957,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     actorId: firstMsg.senderId,
     ...(threadId ? { threadId } : {}),
   };
-  const capability =
-    controls.profileConfig.agentKind === 'codex'
-      ? codexCapability(controls.profileConfig)
-      : claudeCapability(controls.profileConfig);
+  const capability = agentCapability(controls.profileConfig);
   const flow = await startRunFlow({
     scopeId: scope,
     scope: scopeContext,
@@ -1169,7 +1168,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           renderDone,
           producerStarted: () => producerStarted,
           fallback: async (state) => {
-            if (controls.profileConfig.agentKind === 'codex') return;
+            if (isCodexFamily(controls.profileConfig.agentKind)) return;
             if (renderText(filterForPrefs(state)).trim() === '') return;
             await channel.send(
               chatId,
@@ -1179,11 +1178,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           },
         });
       } catch (err) {
-        if (controls.profileConfig.agentKind !== 'codex') throw err;
+        if (!isCodexFamily(controls.profileConfig.agentKind)) throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
       await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
-      if (controls.profileConfig.agentKind === 'codex') {
+      if (isCodexFamily(controls.profileConfig.agentKind)) {
         await sendFinalReply({
           channel,
           chatId,
@@ -1234,7 +1233,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           renderDone,
           producerStarted: () => producerStarted,
           fallback: async (state) => {
-            if (controls.profileConfig.agentKind === 'codex') return;
+            if (isCodexFamily(controls.profileConfig.agentKind)) return;
             const body = renderText(filterForPrefs(state));
             if (body.trim()) {
               await channel.send(chatId, { markdown: body }, sendOpts);
@@ -1242,11 +1241,11 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           },
         });
       } catch (err) {
-        if (controls.profileConfig.agentKind !== 'codex') throw err;
+        if (!isCodexFamily(controls.profileConfig.agentKind)) throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
       await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
-      if (controls.profileConfig.agentKind === 'codex') {
+      if (isCodexFamily(controls.profileConfig.agentKind)) {
         await sendFinalReply({
           channel,
           chatId,
@@ -1274,7 +1273,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         chatId,
         scope,
         state:
-          controls.profileConfig.agentKind === 'codex'
+          isCodexFamily(controls.profileConfig.agentKind)
             ? finalAnswerOnlyState(filterForPrefs(finalState))
             : filterForPrefs(finalState),
         replyMode,

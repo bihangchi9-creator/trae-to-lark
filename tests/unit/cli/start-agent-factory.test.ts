@@ -69,6 +69,30 @@ describe('start runtime agent factory', () => {
     expect(profile.codex?.binaryPath).toBe('codex');
   });
 
+  it('creates a TRAE runtime agent (Codex fork) with the TRAE identity', () => {
+    const profile = createDefaultProfileConfig({
+      agentKind: 'trae',
+      accounts: appAccount(),
+      codex: { binaryPath: '/usr/local/bin/traex' },
+      permissions: { defaultAccess: 'workspace', maxAccess: 'workspace' },
+    });
+    const agent = createRuntimeAgent(profile, {
+      profileDir: '/tmp/lark-channel-bridge/profiles/trae-e2e',
+    });
+
+    expect(agent.id).toBe('trae');
+    expect(agent.displayName).toBe('TRAE CLI');
+  });
+
+  it('seeds a default traex binary when bootstrapping a new TRAE profile', () => {
+    const profile = createRuntimeProfileConfig({
+      agentKind: 'trae',
+      accounts: appAccount(),
+    });
+
+    expect(profile.codex?.binaryPath).toBe('traex');
+  });
+
   it('updates the process registry before releasing the old app lock during reconnect', async () => {
     // Reconnect ordering now lives in the supervisor's ManagedProfile.restart().
     const source = await readFile(join(process.cwd(), 'src/runtime/supervisor.ts'), 'utf8');
@@ -103,6 +127,8 @@ describe('start runtime agent factory', () => {
   it('rejects reconnect when a profile changes agent kind in place', () => {
     expect(() => assertReconnectAgentKindUnchanged('claude', 'codex')).toThrow(/agent kind/i);
     expect(() => assertReconnectAgentKindUnchanged('codex', 'codex')).not.toThrow();
+    expect(() => assertReconnectAgentKindUnchanged('codex', 'trae')).toThrow(/agent kind/i);
+    expect(() => assertReconnectAgentKindUnchanged('trae', 'trae')).not.toThrow();
   });
 });
 

@@ -96,6 +96,35 @@ describe('profile schema', () => {
     ).toThrow(/codex/i);
   });
 
+  it('accepts a trae profile and requires codex-family configuration for it', () => {
+    const cfg = createDefaultProfileConfig({
+      agentKind: 'trae',
+      accounts: { app },
+      codex: { binaryPath: '/usr/local/bin/traex' },
+    });
+    expect(cfg.agentKind).toBe('trae');
+    // TRAE is a Codex fork, so it stores its binary in the shared codex config.
+    expect(cfg.codex?.binaryPath).toBe('/usr/local/bin/traex');
+
+    expect(() =>
+      normalizeProfileConfig({
+        schemaVersion: 2,
+        agentKind: 'trae',
+        accounts: { app },
+      }),
+    ).toThrow(/trae|codex/i);
+  });
+
+  it('rejects an unknown agent kind', () => {
+    expect(() =>
+      normalizeProfileConfig({
+        schemaVersion: 2,
+        agentKind: 'gemini',
+        accounts: { app },
+      }),
+    ).toThrow(/claude, codex, or trae/i);
+  });
+
   it('rejects sandbox defaults that exceed max capability as a permission error', () => {
     expect(() =>
       normalizeProfileConfig({

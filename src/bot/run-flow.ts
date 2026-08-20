@@ -2,6 +2,7 @@ import type { AgentCapability } from '../agent/capability';
 import { resolveModelArg } from '../agent/models';
 import type { AgentEvent } from '../agent/types';
 import type { ProfileConfig } from '../config/profile-schema';
+import { isCodexFamily } from '../config/profile-schema';
 import type { AccessDecision } from '../policy/access';
 import {
   evaluateRunPolicy,
@@ -123,8 +124,8 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     if (catalogEntry?.agentId === 'claude') {
       sessionId = catalogEntry.sessionId;
       resumeFrom = sessionId;
-    } else if (catalogEntry?.agentId === 'codex') {
-      threadId = catalogEntry.threadId;
+    } else if (isCodexFamily(catalogEntry?.agentId)) {
+      threadId = catalogEntry?.threadId;
       resumeFrom = threadId;
     }
   }
@@ -139,17 +140,18 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
 
   let execution: RunExecution;
   try {
+    // Per-scope model override (set via `/model` in that chat) wins over the
+    // profile-global preference; falls back to the global when unset.
+    const scopeModelPref =
+      input.workspaces.modelFor(input.scopeId) ?? input.profileConfig.preferences.model;
     execution = await input.executor.submit({
       scopeId: input.scopeId,
       policy,
       sessionId,
       threadId,
-      model: resolveModelArg(
-        input.profileConfig.agentKind,
-        input.profileConfig.preferences.model,
-      ),
+      model: resolveModelArg(input.profileConfig.agentKind, scopeModelPref),
       images:
-        input.capability.agentId === 'codex'
+        isCodexFamily(input.capability.agentId)
           ? policy.attachments
               .filter((attachment) => attachment.kind === 'image' && attachment.decision === 'accepted')
               .map((attachment) => attachment.path)
@@ -200,10 +202,10 @@ export function recordRunSessionEvent(input: RecordRunSessionEventInput): void {
     });
     return;
   }
-  if (input.capability.agentId === 'codex' && input.event.threadId) {
+  if (isCodexFamily(input.capability.agentId) && input.event.threadId) {
     input.sessionCatalog?.upsertActive({
       scopeId: input.scopeId,
-      agentId: 'codex',
+      agentId: input.capability.agentId,
       cwdRealpath: input.policy.cwdRealpath,
       policyFingerprint: input.policy.policyFingerprint,
       threadId: input.event.threadId,

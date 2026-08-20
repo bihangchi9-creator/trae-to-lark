@@ -7,7 +7,7 @@ import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../..
 import { SpawnFailed } from '../../runtime/errors';
 import { prefixBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
-import { checkAgentAvailability, type AgentAvailability } from '../preflight';
+import { checkAgentAvailability, type AgentAvailability, type LocalAgentId } from '../preflight';
 import type {
   AgentAdapter,
   AgentBotIdentity,
@@ -21,6 +21,14 @@ import { CodexJsonlTranslator, type CodexFinishReason } from './jsonl';
 export interface CodexAdapterOptions {
   binary: string;
   profileStateDir: string;
+  /**
+   * Adapter identity. Defaults to codex. TRAE CLI (`traex`) is a Codex fork
+   * with an identical `exec` interface, JSONL stream, and CODEX_HOME auth, so
+   * it reuses this adapter and only overrides the id/displayName so `/status`,
+   * diagnostics, and the process registry report "TRAE CLI".
+   */
+  agentId?: LocalAgentId;
+  displayName?: string;
   codexHome?: string;
   inheritCodexHome?: boolean;
   ignoreUserConfig?: boolean;
@@ -33,8 +41,8 @@ export interface CodexAdapterOptions {
 type CodexChild = SpawnedProcessByStdio<Writable, Readable, Readable>;
 
 export class CodexAdapter implements AgentAdapter {
-  readonly id = 'codex';
-  readonly displayName = 'Codex CLI';
+  readonly id: LocalAgentId;
+  readonly displayName: string;
 
   private readonly binary: string;
   private readonly profileStateDir: string;
@@ -48,6 +56,8 @@ export class CodexAdapter implements AgentAdapter {
   private botIdentity: AgentBotIdentity | undefined;
 
   constructor(opts: CodexAdapterOptions) {
+    this.id = opts.agentId ?? 'codex';
+    this.displayName = opts.displayName ?? 'Codex CLI';
     this.binary = opts.binary;
     this.profileStateDir = opts.profileStateDir;
     this.codexHome = opts.codexHome;
@@ -69,8 +79,8 @@ export class CodexAdapter implements AgentAdapter {
 
   async checkAvailability(): Promise<AgentAvailability> {
     return checkAgentAvailability({
-      agentId: 'codex',
-      agentName: 'Codex CLI',
+      agentId: this.id,
+      agentName: this.displayName,
       command: this.binary,
       binaryPath: this.binary,
     });
@@ -80,7 +90,7 @@ export class CodexAdapter implements AgentAdapter {
     const availability = await this.checkAvailability();
     if (!availability.ok) {
       throw new SpawnFailed(
-        'codex binary check failed',
+        `${this.id} binary check failed`,
         availability.error,
         availability.diagnostic.code,
         availability.diagnostic,

@@ -68,6 +68,9 @@ export interface StatusInfo {
   emptySessionText?: string;
   sessionStale: boolean;
   agentName: string;
+  /** Effective model label for this scope, plus whether it's a per-chat
+   * override or the global default. Omitted when unknown. */
+  model?: { label: string; source: 'chat' | 'global' };
   runtimeAccess: {
     label: string;
     value: string;
@@ -104,6 +107,11 @@ export function statusCard(info: StatusInfo): object {
     `📁 **cwd**: ${cwdLine}`,
     `🔗 **session**: ${sessionLine}`,
     `🤖 **agent**: ${escapeMd(info.agentName)}`,
+    ...(info.model
+      ? [
+          `🧠 **model**: ${escapeMd(info.model.label)} _（${info.model.source === 'chat' ? '本 chat 覆盖' : '全局默认'}）_`,
+        ]
+      : []),
     `🛡 **${escapeMd(info.runtimeAccess.label)}**: ${escapeMd(info.runtimeAccess.value)}`,
     ...(info.larkCliStatus ? [`🔐 **lark-cli**: ${info.larkCliStatus}`] : []),
     `🏃 **active run**: ${info.activeRun ? 'yes' : 'no'}`,
@@ -182,24 +190,41 @@ export function helpCard(agentName = 'Agent'): object {
   return shell('💡 使用帮助', [
     divMd(
       [
-        '**命令列表**',
-        '',
+        '**🗨 会话 & 工作目录**',
         '- `/new` `/reset` — 清空当前 chat 的会话',
-        '- `/new chat [name]` — 新建群+新会话，自动拉你进群',
         '- `/resume [N]` — 列出并恢复历史会话（最多 N 条）',
         '- `/cd <path>` — 切换工作目录（会重置 session）',
-        '- `/ws list|save <name>|use <name>|remove <name>` — 工作目录',
+        '- `/ws list|save <name>|use <name>|remove <name>` — 命名工作目录',
+        '- `/model [序号|id|reset]` — 查看/设置本 chat 的模型（仅当前群生效）',
+        '- `/status` — 当前状态（scope / cwd / session / 模型等）',
+        '',
+        '**👥 建群 & 成员/白名单**（管理员）',
+        '- `/new chat [name]` — 新建群 + 新会话，自动拉你进群，cwd 继承自当前群',
+        '- `/invite group` — 把当前群加入响应名单；`/invite all group` 一键加入 bot 所在的所有群',
+        '- `/invite user @某人` — 允许该用户私聊；`/invite admin @某人` — 设为管理员',
+        '- `/remove group` — 把当前群移出响应名单',
+        '- `/remove user @某人` / `/remove admin @某人` — 移出白名单 / 管理员',
+        '',
+        '**📅 会议智能体**（管理员，需在 `/config` 开启）',
+        '- `/meeting join <9位会议号>` — 让 bot 入会',
+        '- `/meeting ask <问题>` / `/meeting notes` — 会中提问 / 生成纪要',
+        '- `/meeting transcript` — 查看字幕缓冲；`/meeting stop` — 中断会议任务',
+        '- `/meeting leave` — 离会；`/meeting status` — 会议状态',
+        '',
+        '**⚙️ 应用 & 配置**（管理员）',
         '- `/account` — 查看当前应用；`/account change` 换 appId/secret 并重连',
         '- `/config` — 调整偏好、访问控制和 lark-cli 身份策略',
-        '- `/status` — 当前状态',
+        '- `/doc` — 云文档评论说明（评论里 @bot 即可触发，无需绑定）',
+        '',
+        '**🔧 运行 & 诊断**',
         '- `/stop` — 结束当前正在跑的任务（也可点卡片底部 ⏹ 终止 按钮）',
         '- `/stop comment:<scopeHash>` — 管理员停止云文档评论任务',
-        '- `/timeout [N|off|default]` — 当前 session 的探活分钟数,`/config` 改全局默认',
+        '- `/timeout [N|off|default]` — 当前 session 探活分钟数，`/config` 改全局默认',
         '- `/timeout comment:<scopeHash> N` — 管理员设置云文档评论任务探活',
-        '- `/ps` — 列出本机所有 bot,标识当前正在回复的那个',
-        '- `/exit <id|#>` — 关掉指定 bot(用 `/ps` 看 id/序号)',
-        '- `/reconnect` — 强制重连 WebSocket(网络抖动后 bot 没反应时用)',
-        `- \`/doctor [描述]\` — 把日志和描述交给 ${escapedAgentName} 自助诊断`,
+        '- `/ps` — 列出本机所有 bot，标识当前正在回复的那个（管理员）',
+        '- `/exit <id|#>` — 关掉指定 bot（用 `/ps` 看 id/序号，管理员）',
+        '- `/reconnect` — 强制重连 WebSocket（网络抖动后 bot 没反应时用，管理员）',
+        `- \`/doctor [描述]\` — 把日志和描述交给 ${escapedAgentName} 自助诊断（管理员）`,
         '- `/help` — 本帮助',
         '',
         `其他内容直接交给 ${escapedAgentName}。`,

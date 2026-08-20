@@ -5,6 +5,7 @@ import type { AppPaths } from '../config/app-paths';
 import { isComplete, type AppConfig } from '../config/schema';
 import type { AgentKind, ProfileConfig } from '../config/profile-schema';
 import type { AgentAdapter } from '../agent/types';
+import { refreshTraeModels } from '../agent/models';
 import { log } from '../core/logger';
 import { refreshOwnerControls } from '../policy/owner';
 import { SessionStore } from '../session/store';
@@ -335,6 +336,14 @@ export class Supervisor {
     if (this.opts.runPreflight !== false) {
       const availability = await checkRuntimeAgentAvailability(agent);
       if (!availability.ok) throw availability.error;
+    }
+
+    // For TRAE, replace the pinned model picker with the account's real
+    // catalog (`traex models`). Best-effort: failure keeps the hardcoded list,
+    // so external users never get blocked by an internal-only default.
+    if (profileConfig.agentKind === 'trae' && this.opts.runPreflight !== false) {
+      const traeCommand = process.env.LARK_CHANNEL_TRAE_BIN ?? 'traex';
+      await refreshTraeModels(traeCommand).catch(() => undefined);
     }
 
     const sessions = new SessionStore(appPaths.sessionsFile);

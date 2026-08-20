@@ -311,6 +311,40 @@ describe('Bridge command contracts', () => {
     const root = await loadRootConfig(h.controls.configPath);
     expect(root?.profiles.claude?.access.allowedChats).toEqual(['oc-group-1', 'oc-group-2']);
   });
+
+  it('sets and clears a per-chat model override via /model', async () => {
+    const h = await createHarness();
+
+    // No args lists options and marks the global default as current.
+    await expect(h.run('/model')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('当前模型');
+    expect(lastMarkdown(h.channel)).toContain('全局默认');
+
+    // Set an override by model id — only affects this scope.
+    await expect(h.run('/model claude-opus-4-8')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('仅对当前 chat 生效');
+    expect(h.workspaces.modelFor('chat-1')).toBe('claude-opus-4-8');
+
+    // A different chat is unaffected.
+    expect(h.workspaces.modelFor('chat-2')).toBeUndefined();
+
+    // Reset falls back to the global default.
+    await expect(h.run('/model reset')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('回落全局默认');
+    expect(h.workspaces.modelFor('chat-1')).toBeUndefined();
+  });
+
+  it('accepts a 1-based index for /model and rejects unknown ids', async () => {
+    const h = await createHarness();
+
+    await expect(h.run('/model 2')).resolves.toBe(true);
+    expect(h.workspaces.modelFor('chat-1')).toBe('claude-opus-4-8');
+
+    await expect(h.run('/model nope-not-a-model')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('未知模型');
+    // Unknown id leaves the previous override intact.
+    expect(h.workspaces.modelFor('chat-1')).toBe('claude-opus-4-8');
+  });
 });
 
 async function createHarness(): Promise<Harness> {

@@ -148,6 +148,22 @@ describe('agent preflight diagnostics', () => {
       expect(message).not.toContain('/opt/homebrew');
     }
   });
+
+  it('renders TRAE CLI diagnostics with the traex command', () => {
+    const err = new AgentPreflightError({
+      code: 'agent-version-check-spawn-failed',
+      agentId: 'trae',
+      agentName: 'TRAE CLI',
+      command: 'traex',
+      binaryPath: '/usr/local/bin/traex',
+      args: ['--version'],
+    });
+    const message = formatAgentPreflightError(err);
+
+    expect(message.split('\n')[0]).toBe('✗ 本地 TRAE CLI 不可用：无法执行 `traex --version`。');
+    expect(message).toContain('traex');
+    expect(message).toContain('错误码：agent-version-check-spawn-failed');
+  });
 });
 
 function fakeSignaledChild() {

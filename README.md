@@ -1,19 +1,20 @@
-# lark-channel-bridge
+# trae-to-lark
 
-A lightweight bot that bridges Feishu / Lark messenger with your local Claude Code or Codex CLI. Run one command, scan a QR code to bind a PersonalAgent app, and talk to your local coding agent from chat.
+A lightweight bot that bridges Feishu / Lark messenger with your local **TRAE CLI (`traex`)**, Claude Code, or Codex CLI. Run one command, scan a QR code to bind a PersonalAgent app, and talk to your local coding agent from chat.
+
+> This project is a fork and creative extension of [lark-coding-agent-bridge](https://github.com/zarazhangrui/lark-coding-agent-bridge) (a.k.a. `feishu-claude-code-bridge`) by [zarazhangrui](https://github.com/zarazhangrui), adding **TRAE CLI (`traex`) as a first-class agent** alongside Claude Code and Codex. TRAE is a Codex fork, so it reuses the same session / event protocol and only differs in binary name, display name, and model catalog. See [Credits](#credits).
 
 [中文 README](./README.zh.md)
 
-For a product walkthrough, see the [Feishu document](https://larkcommunity.feishu.cn/docx/OaRIdFIRFoLM3xxTmKwcetHqn5e).
-
 ## What it does
 
-- Forwards Feishu / Lark messages to local Claude Code or Codex CLI. Send a DM directly, or `@bot` in a group.
+- Forwards Feishu / Lark messages to local TRAE CLI / Claude Code / Codex CLI. Send a DM directly, or `@bot` in a group.
 - **Streaming card**: text replies and tool calls update on one Lark card in real time.
 - **COT process messages**: optionally send a process message with agent progress text and tool calls, then send the final answer separately.
 - **Session continuity**: each chat, topic, or document comment thread keeps its own session.
 - **Queueing and batching**: messages sent in quick succession are handled together; messages sent during a run are queued for the next turn, while commands like `/new`, `/cd`, `/ws use`, and `/stop` can interrupt the current task.
 - **Multiple workspaces**: use `/cd` to switch the current project, and `/ws` to save and reuse common project directories.
+- **Per-chat model**: use `/model` to pin a model per group / topic independently; unset chats fall back to the `/config` global default.
 - **Images and files**: send them to the bot directly, and the bridge downloads them locally for the agent.
 - **Interactive cards**: `/help`, `/ws list`, and `/status` return cards with clickable buttons.
 
@@ -21,6 +22,7 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 
 - Node.js **>= 20.12.0**
 - At least one local agent installed and logged in:
+  - TRAE CLI: `traex` (default command; override the binary path with `LARK_CHANNEL_TRAE_BIN`)
   - Claude Code: `claude`, see https://docs.anthropic.com/en/docs/claude-code/quickstart
   - Codex CLI: `codex`, see https://developers.openai.com/codex/cli
 - A Feishu / Lark **PersonalAgent** app. The first-run QR wizard can create and bind one for you.
@@ -28,15 +30,17 @@ For a product walkthrough, see the [Feishu document](https://larkcommunity.feish
 ## Install
 
 ```bash
-npm i -g lark-channel-bridge
+npm i -g trae-to-lark
 # or
-pnpm add -g lark-channel-bridge
+pnpm add -g trae-to-lark
 ```
+
+> The global install provides a `trae-to-lark` command (the legacy `lark-channel-bridge` command is kept as a backward-compatible alias; they are equivalent).
 
 ## First run
 
 ```bash
-lark-channel-bridge run
+trae-to-lark run
 ```
 
 The first run opens a QR-code wizard:
@@ -44,7 +48,7 @@ The first run opens a QR-code wizard:
 1. A QR code renders in your terminal.
 2. Scan it with the Feishu / Lark app.
 3. Pick or create a PersonalAgent app.
-4. If prompted, choose which agent to initialize.
+4. If prompted, choose which agent to initialize (`claude` / `codex` / `trae`).
 5. Config is written to `~/.lark-channel/config.json`.
 
 You do not need to choose a project directory up front. The bridge creates a profile-managed default working directory; after startup, send `/cd <path>` in Feishu / Lark to switch to a real project.
@@ -52,21 +56,39 @@ You do not need to choose a project directory up front. The bridge creates a pro
 If you already have a PersonalAgent app, pass `--app-id` during initialization to skip app creation. The command prompts for the App Secret.
 
 ```bash
-lark-channel-bridge run --app-id cli_xxx
+trae-to-lark run --app-id cli_xxx
 # or initialize and start the background service directly
-lark-channel-bridge start --app-id cli_xxx
+trae-to-lark start --app-id cli_xxx
 ```
 
 For Lark global apps, add `--tenant lark`.
+
+## Connect with TRAE CLI (added by this project)
+
+TRAE shares Codex's session model, so connecting works the same way — just pass `--agent trae`:
+
+```bash
+# Foreground debugging: init a trae-dedicated profile and start
+trae-to-lark run --profile trae --agent trae
+
+# If traex is not on PATH, point at the binary explicitly
+LARK_CHANNEL_TRAE_BIN=/path/to/traex trae-to-lark run --profile trae --agent trae
+
+# Once messaging works, run it in the background
+trae-to-lark start --profile trae --agent trae
+trae-to-lark status --profile trae
+```
+
+After connecting, send `/status` in Feishu / Lark and it shows `agent: TRAE CLI (trae)`. Messages, streaming cards, and `/resume` all use the shared Codex-family pipeline.
 
 ## Background service
 
 Use `run` for first-run setup and foreground debugging. After the bot can send and receive messages, stop the foreground process with `Ctrl-C`, then use an OS-managed service for background operation:
 
 ```bash
-lark-channel-bridge start
-lark-channel-bridge status
-lark-channel-bridge stop
+trae-to-lark start
+trae-to-lark status
+trae-to-lark stop
 ```
 
 Install globally before using service commands. The daemon's launchd plist / systemd unit / Windows task records the bridge CLI path; if that path comes from an npm temp cache through `npx`, the daemon can break when the cache is cleaned. `run` is fine through `npx` as a one-shot foreground process.
@@ -74,11 +96,11 @@ Install globally before using service commands. The daemon's launchd plist / sys
 Service commands install a per-profile service:
 
 ```bash
-lark-channel-bridge start [--profile <name>]
-lark-channel-bridge stop [--profile <name>]
-lark-channel-bridge restart [--profile <name>]
-lark-channel-bridge status [--profile <name>]
-lark-channel-bridge unregister [--profile <name>]
+trae-to-lark start [--profile <name>]
+trae-to-lark stop [--profile <name>]
+trae-to-lark restart [--profile <name>]
+trae-to-lark status [--profile <name>]
+trae-to-lark unregister [--profile <name>]
 ```
 
 Platform mapping:
@@ -88,20 +110,21 @@ Platform mapping:
 
 Daemon logs are under `~/.lark-channel/profiles/<profile>/logs/daemon/`.
 
-### Multiple profiles: Claude and Codex
+### Multiple profiles: TRAE / Claude / Codex
 
-By default, the bridge starts with the currently selected profile. Use `profile use <name>` to change it. Each profile keeps its own app credentials, sessions, working directories, and logs. Create multiple profiles only when you need to connect multiple PersonalAgent apps, or run Claude and Codex as separate bots:
+By default, the bridge starts with the currently selected profile. Use `profile use <name>` to change it. Each profile keeps its own app credentials, sessions, working directories, and logs. Create multiple profiles only when you need to connect multiple PersonalAgent apps, or run TRAE, Claude, and Codex as separate bots:
 
 ```bash
-lark-channel-bridge start --profile claude --agent claude
-lark-channel-bridge start --profile codex --agent codex
+trae-to-lark start --profile trae --agent trae
+trae-to-lark start --profile claude --agent claude
+trae-to-lark start --profile codex --agent codex
 ```
 
-For example, to restart only the Codex bot:
+For example, to restart only the TRAE bot:
 
 ```bash
-lark-channel-bridge restart --profile codex
-lark-channel-bridge status --profile codex
+trae-to-lark restart --profile trae
+trae-to-lark status --profile trae
 ```
 
 ## Commands
@@ -109,24 +132,25 @@ lark-channel-bridge status --profile codex
 ### Host CLI
 
 ```text
-lark-channel-bridge run [--profile <name>] [--agent claude|codex] [--workspace <path>] [-c <config>]
-lark-channel-bridge migrate [--profile <name>] [--agent claude|codex]
-lark-channel-bridge ps
-lark-channel-bridge kill <id|#>
-lark-channel-bridge --help
+trae-to-lark run [--profile <name>] [--agent claude|codex|trae] [--workspace <path>] [-c <config>]
+trae-to-lark migrate [--profile <name>] [--agent claude|codex|trae]
+trae-to-lark ps
+trae-to-lark kill <id|#>
+trae-to-lark --help
 ```
 
 `profile use <name>` changes the profile used by later default starts. Use these profile management commands when running separate Claude / Codex bots, connecting multiple PersonalAgent apps, or doing scripted deployment:
 
 ```bash
-lark-channel-bridge profile create claude --agent claude
-lark-channel-bridge profile create codex --agent codex
-lark-channel-bridge profile list
-lark-channel-bridge profile use <name>
-lark-channel-bridge profile remove <name>
-lark-channel-bridge profile remove <name> --purge --yes
-lark-channel-bridge profile export <name> [--output ./profile.json] [--force]
-lark-channel-bridge profile export <name> --include-secrets --yes
+trae-to-lark profile create claude --agent claude
+trae-to-lark profile create codex --agent codex
+trae-to-lark profile create trae --agent trae
+trae-to-lark profile list
+trae-to-lark profile use <name>
+trae-to-lark profile remove <name>
+trae-to-lark profile remove <name> --purge --yes
+trae-to-lark profile export <name> [--output ./profile.json] [--force]
+trae-to-lark profile export <name> --include-secrets --yes
 ```
 
 `profile remove` archives local state by default, including the active profile. If other profiles remain, the bridge switches to the next one; if it was the last profile, the root config is cleared so the same name can be created again. `--purge --yes` permanently deletes local state. `profile export` redacts app secrets by default; `--include-secrets --yes` includes sensitive config.
@@ -143,8 +167,11 @@ If a profile was created with the wrong agent kind, stop or unregister any match
 | `/ws save <name>` | Save the current working directory as a named workspace |
 | `/ws use <name>` | Switch to a named workspace |
 | `/ws remove <name>` | Delete a named workspace |
+| `/model` | Show the model in effect for this chat and the available list |
+| `/model <index\|id>` | Set the model for this chat (group/topic) only, without affecting other chats |
+| `/model reset` | Clear this chat's model override and fall back to the `/config` global default |
 | `/resume` | Resume compatible history for the same agent, working directory, and permission mode |
-| `/status` | Show profile, agent, working directory, session, lark-cli identity, and run state |
+| `/status` | Show profile, agent, model, working directory, session, lark-cli identity, and run state |
 | `/config` | Adjust presentation preferences, access settings, and lark-cli identity policy |
 | `/invite user @name` | Allow a user to use the bot in DMs |
 | `/invite admin @name` | Add an access-control admin |
@@ -330,13 +357,13 @@ By default the bridge reports **nothing**: no metrics, no logs leave your machin
 To wire up your own monitoring, point an environment variable at a module that default-exports (or exports `createAdapter`) an `AdapterFactory`:
 
 ```bash
-LARK_CHANNEL_TELEMETRY_MODULE=your-telemetry-package lark-channel-bridge start
+LARK_CHANNEL_TELEMETRY_MODULE=your-telemetry-package trae-to-lark start
 ```
 
 That module receives every `log.*` event plus error/metric hooks and forwards them wherever you like. The interface is exported from the package root:
 
 ```ts
-import type { AdapterFactory, TelemetryAdapter, TelemetryEvent } from 'lark-channel-bridge';
+import type { AdapterFactory, TelemetryAdapter, TelemetryEvent } from 'trae-to-lark';
 
 const createAdapter: AdapterFactory = (meta) => ({
   emit(event) {/* ship event */},
@@ -349,8 +376,10 @@ export default createAdapter;
 
 A missing module, a bad factory, or a throwing adapter all degrade to noop — telemetry can never stop the bridge from starting or break logging.
 
+## Credits
+
+`trae-to-lark` is a fork of [lark-coding-agent-bridge](https://github.com/zarazhangrui/lark-coding-agent-bridge) (originally `feishu-claude-code-bridge`) by [zarazhangrui](https://github.com/zarazhangrui). This fork adds TRAE CLI support and related changes. All original work remains under its MIT license; see [LICENSE](./LICENSE) for the full copyright chain.
+
 ## License
 
 [MIT](./LICENSE)
-
-<img src="./assets/feedback-group-qr.png" alt="Feedback group QR code" width="360">

@@ -1,6 +1,9 @@
 MIT License
 
-Copyright (c) 2026 Lark Channel Bridge contributors
+Copyright (c) 2026 zarazhangrui (original work: feishu-claude-code-bridge /
+lark-coding-agent-bridge)
+Copyright (c) 2026 bihangchi (trae-to-lark: TRAE CLI support and related
+modifications)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { BRIDGE_SYSTEM_PROMPT } from '../../../src/agent/bridge-system-prompt';
-import { claudeCapability, codexCapability } from '../../../src/agent/capability';
+import {
+  agentCapability,
+  claudeCapability,
+  codexCapability,
+  traeCapability,
+} from '../../../src/agent/capability';
 import { createDefaultProfileConfig } from '../../../src/config/profile-schema';
 
 describe('agent capability contract', () => {
@@ -71,5 +76,60 @@ describe('agent capability contract', () => {
     });
 
     expect(codexCapability(profile).permissions.maxAccess).toBe('read-only');
+  });
+
+  it('defines TRAE capability sharing the Codex thread shape but tagged as trae', () => {
+    const profile = createDefaultProfileConfig({
+      agentKind: 'trae',
+      accounts: {
+        app: {
+          id: 'cli_test',
+          secret: '${APP_SECRET}',
+          tenant: 'feishu',
+        },
+      },
+      codex: {
+        binaryPath: '/usr/local/bin/traex',
+      },
+      permissions: {
+        defaultAccess: 'workspace',
+        maxAccess: 'workspace',
+      },
+    });
+
+    expect(traeCapability(profile)).toMatchObject({
+      agentId: 'trae',
+      sessionKind: 'codex-thread',
+      promptInjection: 'stdin-prefix',
+      supportsNativeHistory: false,
+      systemPrompt: BRIDGE_SYSTEM_PROMPT,
+      permissions: {
+        maxAccess: 'workspace',
+      },
+    });
+  });
+
+  it('dispatches agentCapability to the matching capability per agent kind', () => {
+    const base = {
+      accounts: {
+        app: { id: 'cli_test', secret: '${APP_SECRET}', tenant: 'feishu' as const },
+      },
+      permissions: { defaultAccess: 'workspace' as const, maxAccess: 'workspace' as const },
+    };
+    const claude = createDefaultProfileConfig({ ...base, agentKind: 'claude' });
+    const codex = createDefaultProfileConfig({
+      ...base,
+      agentKind: 'codex',
+      codex: { binaryPath: '/usr/local/bin/codex' },
+    });
+    const trae = createDefaultProfileConfig({
+      ...base,
+      agentKind: 'trae',
+      codex: { binaryPath: '/usr/local/bin/traex' },
+    });
+
+    expect(agentCapability(claude).agentId).toBe('claude');
+    expect(agentCapability(codex).agentId).toBe('codex');
+    expect(agentCapability(trae).agentId).toBe('trae');
   });
 });

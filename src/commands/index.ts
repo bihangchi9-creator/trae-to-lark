@@ -3,8 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
-import { claudeCapability, codexCapability } from '../agent/capability';
-import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
+import { agentCapability } from '../agent/capability';
+import {
+  DEFAULT_MODEL,
+  isDefaultModel,
+  modelLabel,
+  normalizeModelSelection,
+  supportedModels,
+} from '../agent/models';
 import type { AgentAdapter } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
 import {
@@ -36,12 +42,13 @@ import {
   getShowToolCalls,
 } from '../config/schema';
 import type {
+  AgentKind,
   LarkCliIdentityPreset,
   ProfileAccess,
   ProfileConfig,
   ProfileMode,
 } from '../config/profile-schema';
-import { effectiveLarkCliIdentity } from '../config/profile-schema';
+import { effectiveLarkCliIdentity, isCodexFamily } from '../config/profile-schema';
 import { resolveAppPaths } from '../config/app-paths';
 import { accessToClaudePermissionMode } from '../config/permissions';
 import {
@@ -153,7 +160,7 @@ type Handler = (args: string, ctx: CommandContext) => Promise<void>;
 
 interface ResumeCandidate {
   scopeId: string;
-  agentId: 'claude' | 'codex';
+  agentId: 'claude' | 'codex' | 'trae';
   cwdRealpath: string;
   policyFingerprint: string;
   sessionId?: string;
@@ -166,11 +173,20 @@ const resumeCandidates = new Map<string, ResumeCandidate>();
 const AUDIT_SAFE_COMMAND_REPLY = '命令已处理。';
 const RESUME_APPLIED_REPLY = '已完成，请继续发送下一条消息。';
 
+/**
+ * Label used for the codex-family "thread" resume copy. TRAE shares Codex's
+ * thread-based session model, so both are surfaced with their own short name.
+ */
+function codexFamilyThreadLabel(kind: AgentKind | undefined): string {
+  return kind === 'trae' ? 'TRAE' : 'Codex';
+}
+
 const handlers: Record<string, Handler> = {
   '/new': handleNew,
   '/reset': handleNew,
   '/cd': handleCd,
   '/ws': handleWs,
+  '/model': handleModel,
   '/resume': handleResume,
   '/status': handleStatus,
   '/help': handleHelp,
@@ -202,6 +218,7 @@ const ADMIN_COMMANDS = new Set([
   '/doctor',
   '/cd',
   '/ws',
+  '/model',
   '/invite',
   '/remove',
   // Joining a meeting makes the bot visible to every participant and exposes
@@ -485,6 +502,89 @@ async function handleDoc(args: string, ctx: CommandContext): Promise<void> {
   await reply(ctx, '云文档评论现在不需要绑定工作区；在支持的文档评论里 @bot 即可触发回复。');
 }
 
+/**
+ * `/model` — inspect or override the model for THIS chat scope. The override
+ * lives in the workspace store keyed by scope (like cwd), so每个群/话题可以各用
+ * 各的模型；未设置时回落到 `/config` 里的全局默认。
+ *
+ *   /model            列出可选模型与当前生效值
+ *   /model <id|序号>   设置本 chat 的模型
+ *   /model reset      清除本 chat 覆盖，回落全局默认
+ */
+async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  const agentKind = ctx.controls.profileConfig.agentKind;
+  const options = supportedModels(agentKind);
+  const globalPref = ctx.controls.cfg.preferences?.model;
+  const override = ctx.workspaces.modelFor(ctx.scope);
+  const input = args.trim();
+
+  // No args: show current + the picker list.
+  if (!input) {
+    await reply(ctx, renderModelStatus(agentKind, options, globalPref, override));
+    return;
+  }
+
+  // Clear the per-chat override.
+  if (input === 'reset' || input === 'default') {
+    if (ctx.workspaces.removeModel(ctx.scope)) {
+      ctx.activeRuns.interrupt(ctx.scope);
+      await reply(
+        ctx,
+        `✓ 已清除本 chat 的模型覆盖，回落全局默认：**${modelLabel(agentKind, globalPref)}**`,
+      );
+    } else {
+      await reply(ctx, '本 chat 没有模型覆盖，已在使用全局默认。');
+    }
+    return;
+  }
+
+  // Accept either a model id or a 1-based index from the list.
+  let selected: string | undefined;
+  const asIndex = Number(input);
+  if (Number.isInteger(asIndex) && asIndex >= 1 && asIndex <= options.length) {
+    selected = options[asIndex - 1]!.value;
+  } else {
+    selected = options.find((m) => m.value.toLowerCase() === input.toLowerCase())?.value;
+  }
+  if (!selected) {
+    await reply(
+      ctx,
+      `未知模型：\`${input}\`\n\n${renderModelStatus(agentKind, options, globalPref, override)}`,
+    );
+    return;
+  }
+
+  ctx.workspaces.setModel(ctx.scope, selected);
+  ctx.activeRuns.interrupt(ctx.scope);
+  await reply(
+    ctx,
+    isDefaultModel(selected)
+      ? `✓ 本 chat 模型设为「跟随默认」，运行时不再指定 \`--model\`。`
+      : `✓ 本 chat 模型已切换为 **${modelLabel(agentKind, selected)}**（仅对当前 chat 生效）。`,
+  );
+}
+
+function renderModelStatus(
+  agentKind: AgentKind,
+  options: { value: string; label: string }[],
+  globalPref: string | undefined,
+  override: string | undefined,
+): string {
+  const effective = override ?? globalPref;
+  const lines = options.map((m, i) => {
+    const mark = normalizeModelSelection(agentKind, effective) === m.value ? '● ' : '   ';
+    return `${mark}${i + 1}. ${m.label} \`${m.value}\``;
+  });
+  const source = override ? '本 chat 覆盖' : '全局默认';
+  return [
+    `**当前模型**：${modelLabel(agentKind, effective)}（来源：${source}）`,
+    '',
+    ...lines,
+    '',
+    '用法：`/model <序号|id>` 设置本 chat 模型；`/model reset` 回落全局。',
+  ].join('\n');
+}
+
 const WORKSPACE_NAME_SEPARATOR = '\u001f';
 
 function scopedWorkspaceName(ctx: CommandContext, name: string): string {
@@ -557,7 +657,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
     return;
   }
 
-  if (ctx.controls.profileConfig.agentKind === 'codex') {
+  if (isCodexFamily(ctx.controls.profileConfig.agentKind)) {
     const identity = ctx.sessionCatalogIdentity;
     const entry =
       ctx.sessionCatalog && identity
@@ -571,7 +671,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
           sessionId: nonce,
           preview: thread.name || thread.preview,
           relTime: formatRelTime(thread.updatedAtMs),
-          detail: `Codex · ${thread.source}`,
+          detail: `${ctx.agent.displayName} · ${thread.source}`,
           current: thread.threadId === entry?.threadId,
         };
       });
@@ -583,7 +683,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
       const nonce = issueResumeCandidate(identity, { threadId: entry.threadId });
       await reply(
         ctx,
-        `当前 Codex thread 可恢复。\n使用 \`/resume use ${nonce}\` 恢复（10 分钟内有效）。`,
+        `当前 ${codexFamilyThreadLabel(ctx.controls.profileConfig.agentKind)} thread 可恢复。\n使用 \`/resume use ${nonce}\` 恢复（10 分钟内有效）。`,
       );
       return;
     }
@@ -615,10 +715,10 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
     if (resolved) {
       ctx.activeRuns.interrupt(ctx.scope);
-      if (ctx.sessionCatalogIdentity.agentId === 'codex') {
+      if (isCodexFamily(ctx.sessionCatalogIdentity.agentId)) {
         ctx.sessionCatalog.upsertActive({
           scopeId: ctx.sessionCatalogIdentity.scopeId,
-          agentId: 'codex',
+          agentId: ctx.sessionCatalogIdentity.agentId,
           cwdRealpath: ctx.sessionCatalogIdentity.cwdRealpath,
           policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
           threadId: resolved.threadId!,
@@ -636,7 +736,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
       await reply(ctx, RESUME_APPLIED_REPLY);
       return;
     }
-    if (ctx.sessionCatalogIdentity.agentId === 'codex') {
+    if (isCodexFamily(ctx.sessionCatalogIdentity.agentId)) {
       await reply(ctx, '当前上下文不可恢复这个会话，请先用 `/resume` 重新生成恢复候选。');
       return;
     }
@@ -653,8 +753,8 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     return;
   }
 
-  if (ctx.controls.profileConfig.agentKind === 'codex') {
-    await reply(ctx, '当前上下文没有可恢复的 Codex thread，请先在当前工作区完成一次运行。');
+  if (isCodexFamily(ctx.controls.profileConfig.agentKind)) {
+    await reply(ctx, `当前上下文没有可恢复的 ${codexFamilyThreadLabel(ctx.controls.profileConfig.agentKind)} thread，请先在当前工作区完成一次运行。`);
     return;
   }
 
@@ -700,7 +800,7 @@ function consumeResumeCandidate(
     candidate.cwdRealpath !== identity.cwdRealpath ||
     candidate.policyFingerprint !== identity.policyFingerprint ||
     (identity.agentId === 'claude' && !candidate.sessionId) ||
-    (identity.agentId === 'codex' && !candidate.threadId)
+    (isCodexFamily(identity.agentId) && !candidate.threadId)
   ) {
     return undefined;
   }
@@ -812,11 +912,13 @@ async function larkCliStatus(ctx: CommandContext): Promise<'app' | 'user-ready' 
 async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
   const cwd = effectiveWorkspaceCwd(ctx);
   const sess = ctx.sessions.getRaw(ctx.scope);
-  const isCodex = ctx.controls.profileConfig.agentKind === 'codex';
+  const isCodex = isCodexFamily(ctx.controls.profileConfig.agentKind);
   const catalogEntry =
     isCodex && ctx.sessionCatalog && ctx.sessionCatalogIdentity
       ? ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity)
       : undefined;
+  const modelOverride = ctx.workspaces.modelFor(ctx.scope);
+  const effectiveModelPref = modelOverride ?? ctx.controls.cfg.preferences?.model;
   const card = statusCard({
     profileName: ctx.controls.profile,
     cwd,
@@ -824,6 +926,10 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
     emptySessionText: isCodex ? '(未建立)' : undefined,
     sessionStale: !isCodex && Boolean(cwd && sess && sess.cwd !== cwd),
     agentName: ctx.agent.displayName,
+    model: {
+      label: modelLabel(ctx.controls.profileConfig.agentKind, effectiveModelPref),
+      source: modelOverride ? 'chat' : 'global',
+    },
     runtimeAccess: runtimeAccessStatus(ctx.controls.profileConfig),
     larkCliStatus: await larkCliStatus(ctx),
     activeRun: Boolean(ctx.activeRuns.get(ctx.scope)),
@@ -1127,10 +1233,7 @@ async function handleDoctor(args: string, ctx: CommandContext): Promise<void> {
   }
   doctorLastByOperator.set(rateKey, now);
 
-  const capability =
-    ctx.controls.profileConfig.agentKind === 'codex'
-      ? codexCapability(ctx.controls.profileConfig)
-      : claudeCapability(ctx.controls.profileConfig);
+  const capability = agentCapability(ctx.controls.profileConfig);
   const policy = evaluateRunPolicy({
     scope: {
       source: 'im',
